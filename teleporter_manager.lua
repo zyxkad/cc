@@ -1,6 +1,10 @@
 -- Teleporter manger for Mekanism
 -- by zyxkad@gmail.com
 
+if not parallel then
+	error('Need parallel API')
+end
+
 local NAMELIST_OFFSET = 3
 
 local function startswith(s, prefix)
@@ -65,99 +69,99 @@ local function waiting_reply(sender, protocol, timeout)
 	return src, reply, prot
 end
 
-local osPullEvent, osPullEventRaw = os.pullEvent, os.pullEventRaw
-local eventListener = {}
-local timerListener = {}
-local cleanups = {}
-local function setTimeout(timeout, callback, ...)
-	local arg = {...}
-	local tid = os.startTimer(timeout)
-	local canceler = function() timerListener[tid] = nil end
-	cleanups[#cleanups + 1] = canceler
-	timerListener[tid] = function()
-		timerListener[tid] = nil
-		callback(table.unpack(arg))
-		return true
-	end
-	return canceler
-end
-local function setInterval(interval, callback, ...)
-	local arg = {...}
-	local tid
-	local canceled = false
-	local canceler = function() canceled = true; timerListener[tid] = nil end
-	cleanups[#cleanups + 1] = canceler
-	local wrap
-	wrap = function()
-		timerListener[tid] = nil
-		local passed = false
-		tid = os.startTimer(interval)
-		-- print('new tid:', tid)
-		timerListener[tid] = function() passed = true; timerListener[tid] = nil end
-		callback(table.unpack(arg))
-		if not canceled then
-			if passed then
-				-- call immedialy
-				print('debug', 'a interval tick passed')
-				wrap()
-			else
-				timerListener[tid] = wrap
-			end
-		end
-		return true
-	end
-	tid = os.startTimer(interval)
-	timerListener[tid] = wrap
-	return canceler
-end
-local eventQueue = nil
-local function wrappedOsRawEventPuller(filter, noraw)
-	if eventQueue then
-		local e = eventQueue
-		if not filter or e.name == filter then
-			eventQueue = e.next
-			return table.unpack(e.val)
-		end
-		local s
-		while e.next do
-			s, e = e, e.next
-			if e.name == filter then
-				s.next = e.next
-				return table.unpack(e.val)
-			end
-		end
-	end
-	while true do
-		local event = {osPullEventRaw()}
-		local name = event[1]
-		if name == 'terminate' then
-			print('cleanups:', #cleanups)
-			for _, c in ipairs(cleanups) do
-				c()
-			end
-			cleanups = {}
-			os.pullEvent, os.pullEventRaw = osPullEvent, osPullEventRaw
-			if noraw then
-				error('Wrapped Terminate')
-			end
-		end
-		local listener = (name == 'timer' and timerListener[event[2]]) or (eventListener[name])
-		if not listener or not listener(table.unpack(event)) then
-			if not filter or filter == name then
-				return table.unpack(event)
-			end
-			eventQueue = {
-				name = name,
-				val = event,
-				next = eventQueue,
-			}
-		end
-	end
-end
-os.pullEventRaw = wrappedOsRawEventPuller
-os.pullEvent = function(filter)
-	return wrappedOsRawEventPuller(filter, true)
-end
+-- local osPullEvent, osPullEventRaw = os.pullEvent, os.pullEventRaw
+-- local eventListener = {}
+-- local timerListener = {}
+-- local cleanups = {}
+-- local function setTimeout(timeout, callback, ...)
+-- 	local arg = {...}
+-- 	local tid = os.startTimer(timeout)
+-- 	local canceler = function() timerListener[tid] = nil end
+-- 	cleanups[#cleanups + 1] = canceler
+-- 	timerListener[tid] = function()
+-- 		timerListener[tid] = nil
+-- 		callback(table.unpack(arg))
+-- 		return true
+-- 	end
+-- 	return canceler
+-- end
+-- local function setInterval(interval, callback, ...)
+-- 	local arg = {...}
+-- 	local tid
+-- 	local canceled = false
+-- 	local canceler = function() canceled = true; timerListener[tid] = nil end
+-- 	cleanups[#cleanups + 1] = canceler
+-- 	local wrap
+-- 	wrap = function()
+-- 		timerListener[tid] = nil
+-- 		local passed = false
+-- 		tid = os.startTimer(interval)
+-- 		-- print('new tid:', tid)
+-- 		timerListener[tid] = function() passed = true; timerListener[tid] = nil end
+-- 		callback(table.unpack(arg))
+-- 		if not canceled then
+-- 			if passed then
+-- 				-- call immedialy
+-- 				print('debug', 'a interval tick passed')
+-- 				wrap()
+-- 			else
+-- 				timerListener[tid] = wrap
+-- 			end
+-- 		end
+-- 		return true
+-- 	end
+-- 	tid = os.startTimer(interval)
+-- 	timerListener[tid] = wrap
+-- 	return canceler
+-- end
+-- local eventQueue = nil
+-- local function wrappedOsRawEventPuller(filter, noraw)
+-- 	if eventQueue then
+-- 		local e = eventQueue
+-- 		if not filter or e.name == filter then
+-- 			eventQueue = e.next
+-- 			return table.unpack(e.val)
+-- 		end
+-- 		local s
+-- 		while e.next do
+-- 			s, e = e, e.next
+-- 			if e.name == filter then
+-- 				s.next = e.next
+-- 				return table.unpack(e.val)
+-- 			end
+-- 		end
+-- 	end
+-- 	while true do
+-- 		local event = {osPullEventRaw()}
+-- 		local name = event[1]
+-- 		if name == 'terminate' then
+-- 			print('cleanups:', #cleanups)
+-- 			for _, c in ipairs(cleanups) do
+-- 				c()
+-- 			end
+-- 			cleanups = {}
+-- 			os.pullEvent, os.pullEventRaw = osPullEvent, osPullEventRaw
+-- 			if noraw then
+-- 				error('Wrapped Terminate')
+-- 			end
+-- 		end
+-- 		local listener = (name == 'timer' and timerListener[event[2]]) or (eventListener[name])
+-- 		if not listener or not listener(table.unpack(event)) then
+-- 			if not filter or filter == name then
+-- 				return table.unpack(event)
+-- 			end
+-- 			eventQueue = {
+-- 				name = name,
+-- 				val = event,
+-- 				next = eventQueue,
+-- 			}
+-- 		end
+-- 	end
+-- end
+-- os.pullEventRaw = wrappedOsRawEventPuller
+-- os.pullEvent = function(filter)
+-- 	return wrappedOsRawEventPuller(filter, true)
+-- end
 
 local function main(arg)
 	local frequency = arg[1]
@@ -267,64 +271,58 @@ local function main(arg)
 	monitor.setTextColor(colors.white)
 	monitor.setBackgroundColor(colors.black)
 	termUpdateAt(monitor, 1, 3)
-	setInterval(0.5, update)
-	while true do
-		print('BEGIN while', os.clock())
-		local event, p1, p2, p3 = os.pullEvent()
-		print('PULLED event:', event, p1)
-		if (monitor == term and event == 'mouse_click') or
-			(monitor ~= term and event == 'monitor_touch' and p1 == monitor_name) then
-			local x, y = p2, p3
-			print('getting frequencies')
-			-- deadlock here
-			local targets = getFrequencies(tpr, frequency)
-			print('done getting frequencies')
-			if NAMELIST_OFFSET < y and y <= #targets + NAMELIST_OFFSET then
-				local tg = targets[y - NAMELIST_OFFSET].key
-				print('getting selected')
-				-- deadlock here
-				local selected = tpr.hasFrequency()
-				print('selected:', selected)
-				selected = selected and tpr.getFrequency()
-				print('done getting selected')
-				if not selected or selected.key ~= tg then
-					print('setting color')
+
+	function onclick(x, y)
+		local targets = getFrequencies(tpr, frequency)
+		if NAMELIST_OFFSET < y and y <= #targets + NAMELIST_OFFSET then
+			local tg = targets[y - NAMELIST_OFFSET].key
+			local selected = tpr.hasFrequency()
+			selected = selected and tpr.getFrequency()
+			if not selected or selected.key ~= tg then
+				monitor.setTextColor(colors.yellow)
+				termUpdateAt(monitor, 1, 3, 'Switching...')
+				tpr.setFrequency(tg)
+				monitor.setTextColor(colors.yellow)
+				termUpdateAt(monitor, 1, 3, 'Trying lookup hoster...')
+				local id = rednet.lookup('teleporter', getFrequencyHostname(tg))
+				if id then
 					monitor.setTextColor(colors.yellow)
-					termUpdateAt(monitor, 1, 3, 'Trying lookup hoster...')
-					print('begin lookup')
-					local id = rednet.lookup('teleporter', getFrequencyHostname(tg))
-					print('end lookup')
-					if id then
-						termUpdateAt(monitor, 1, 3, 'Querying remote teleporter...')
-						rednet.send(id, frequency, 'teleporter-query')
-						local src, reply = waiting_reply(id, 'teleporter-query-reply', 3)
-						if src then
-							if reply == 'busy' then
-								monitor.setTextColor(colors.red)
-								termUpdateAt(monitor, 1, 3, 'Remote is BUZY')
-							elseif reply == 'ok' then
-								monitor.setTextColor(colors.green)
-								termUpdateAt(monitor, 1, 3, 'Remote synced')
-							elseif startswith(reply, 'error:') then
-								monitor.setTextColor(colors.red)
-								termUpdateAt(monitor, 1, 3, reply:sub(7))
-							end
-						else
+					termUpdateAt(monitor, 1, 3, 'Querying remote teleporter...')
+					rednet.send(id, frequency, 'teleporter-query')
+					local src, reply = waiting_reply(id, 'teleporter-query-reply', 3)
+					if src then
+						if reply == 'busy' then
 							monitor.setTextColor(colors.red)
-							termUpdateAt(monitor, 1, 3, "Cannot connect to remote port")
+							termUpdateAt(monitor, 1, 3, 'Remote is BUZY')
+						elseif reply == 'ok' then
+							monitor.setTextColor(colors.green)
+							termUpdateAt(monitor, 1, 3, 'Remote synced')
+						elseif startswith(reply, 'error:') then
+							monitor.setTextColor(colors.red)
+							termUpdateAt(monitor, 1, 3, reply:sub(7))
 						end
-						sleep(0.2)
+					else
+						monitor.setTextColor(colors.red)
+						termUpdateAt(monitor, 1, 3, "Cannot connect to remote port")
 					end
-					termUpdateAt(monitor, 1, 3, 'Switching...')
-					-- deadlock here
-					tpr.setFrequency(tg)
-					termUpdateAt(monitor, 1, 3)
+					sleep(0.5)
 				end
+				termUpdateAt(monitor, 1, 3)
 			end
-		elseif event == 'rednet_message' then
-			local sender, message, protocol = p1, p2, p3
+		end
+	end
+
+	parallel.waitForAny(function()
+		while true do
+			update()
+			sleep(0.5)
+		end
+	end, function()
+		while true do
+			local _, sender, msg, protocol = os.pullEvent('rednet_message')
 			if protocol == 'teleporter-query' then
-				termUpdateAt(monitor, 1, 3, string.format('Sync with [%s]...', message))
+				monitor.setTextColor(colors.yellow)
+				termUpdateAt(monitor, 1, 3, string.format('Sync with [%s]...', msg))
 				local reply
 				local ok, err = pcall(tpr.setFrequency, frequency)
 				if ok then
@@ -335,7 +333,19 @@ local function main(arg)
 				rednet.send(sender, reply, 'teleporter-query-reply')
 			end
 		end
-	end
+	end, function()
+		while true do
+			if monitor == term then
+				local event, p1, p2, p3 = os.pullEvent('mouse_click')
+				onclick(p2, p3)
+			else
+				local event, p1, p2, p3 = os.pullEvent('monitor_touch')
+				if p1 == monitor_name then
+					onclick(p2, p3)
+				end
+			end
+		end
+	end)
 end
 
 main({...})

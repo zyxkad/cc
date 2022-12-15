@@ -53,8 +53,7 @@ end
 local Table = {}
 
 local function makeTable(poly)
-	local t = {}
-	setmetatable(t, {__index = Table})
+	local t = setmetatable({}, {__index = Table})
 	simplePopulateTable(poly, t)
 	return t
 end
@@ -100,8 +99,7 @@ local IEEETable = ieeeTable8[0]
 local Digest = { crc = 0, tab = IEEETable }
 
 function Digest:new(o, tab)
-	o = o or {}
-	setmetatable(o, {__index = self})
+	o = setmetatable(o or {}, {__index = self})
 	o.crc = 0
 	o.tab = tab or self.tab
 	return o

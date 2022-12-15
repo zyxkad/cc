@@ -1,12 +1,44 @@
 -- Remote turtle server side
 -- by zyxkad@gmail.com
 
+os.pullEvent = os.pullEventRaw
+
 if not turtle then
 	error("turtle API not found")
 end
 
 if not rednet then
 	error("rednet API not found")
+end
+
+local aes = aes
+if not aes then
+	aes = require('aes')
+	if not aes then
+		error('aes API not found')
+	end
+end
+
+local global_aes_key, err = aes.loadKey()
+if not global_aes_key then
+	error('Cannot load global aes key: ' .. err)
+end
+
+local hmac = hmac
+if not hmac then
+	hmac = require('hmac')
+	if not hmac then
+		error('hmac API not found')
+	end
+end
+
+local sgps = require('sgps')
+if not sgps then
+	error("sgps API not found")
+end
+
+local function getSecond()
+	return math.floor(os.epoch() / 100000)
 end
 
 local function rednetReply(protocol, recver, v)
@@ -41,23 +73,34 @@ local rpcDCalls = {
 
 	refuel = function() return turtle.refuel() end,
 	getFuel = function()
-		local level = turtle.getFuelLevel()
-		if level == "unlimited" then
-			return -1
-		end
-		return level
-	end,
-	getFuelLimit = function()
-		local limit = turtle.getFuelLimit()
+		local level, limit = turtle.getFuelLevel(), turtle.getFuelLimit()
 		if limit == "unlimited" then
-			return -1
+			return {0, 0}
 		end
-		return limit
+		return {level, limit}
 	end,
+
+	locate = function()
+		local x, y, z = sgps.locate()
+		if not x then
+			return nil
+		end
+		return {x, y, z}
+	end,
+
+	exit = function()
+		error("EXIT command received")
+	end
 }
 
 local function handle_msg(prot, sdr, msg)
-	local cmd, arg = msg.c, msg.a
+	local cmd, arg, exp = msg.c, msg.a, msg.exp
+	if not exp or exp < getSecond() or msg.hmac ~= hmac.signCrc32(
+		global_aes_key, { exp = exp, sub = "rmt-tultle" },
+		{ c = cmd, a = arg }) then
+		return
+	end
+	print('Running', cmd)
 	local c = rpcDCalls[cmd]
 	if c then
 		rednetReply(prot, sdr, c(arg))
@@ -68,7 +111,7 @@ local function handle_msg(prot, sdr, msg)
 end
 
 local function main()
-	print("Starting turtle server with arguments:", table.concat(arg, ", "))
+	-- print("Starting turtle server with arguments:", table.concat(arg, ", "))
 
 	local id = arg[1]
 	if not id then

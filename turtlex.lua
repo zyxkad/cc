@@ -28,6 +28,37 @@ local function doN(c, n)
 	return true, n
 end
 
+local turnLeft, turnRight, turnBack
+
+turnLeft = function(n, before, after)
+	if n and n < 0 then
+		return turnRight(-n, before, after)
+	end
+	before = before or function() return true end
+	after = after or function() return true end
+	return doN(function() return before() and turtle.turnLeft() and after() end, n)
+end
+
+turnRight = function(n, before, after)
+	if n and n < 0 then
+		return turnLeft(-n, before, after)
+	end
+	before = before or function() return true end
+	after = after or function() return true end
+	return doN(function() return before() and turtle.turnRight() and after() end, n)
+end
+
+turnBack = function(n, before, after)
+	local turn = turtle.turnRight
+	if n and n < 0 then
+		n = -n
+		turn = turtle.turnLeft
+	end
+	before = before or function() return true end
+	after = after or function() return true end
+	return doN(function() return before() and turn() and turn() and after() end, n)
+end
+
 local forward, back, up, down, left, right
 
 forward = function(n, before, after)
@@ -96,10 +127,6 @@ right = function(n, before, after)
 		return false, i
 	end
 	return ok, i
-end
-
-local function turnBack()
-	return turtle.turnRight() and turtle.turnRight()
 end
 
 local digForward, digBack, digUp, digDown, digLeft, digRight
@@ -254,16 +281,16 @@ local reverseFaceTb = {
 	north = "south",
 }
 
-local function reverseFace(face)
+local function reverseDirection(face)
 	return reverseFaceTb[faceTb[face]]
 end
 
-local function getFace0()
+local function getDirection0()
 	local x0, y0, z0 = locate()
 	local back, backfn = false, turtle.back
 	if not turtle.forward() then
 		if not turtle.back() then
-			error("Turtle cannot move forward or backward")
+			error("Turtle can move nether forward nor backward")
 		else
 			back, backfn = true, turtle.forward
 		end
@@ -289,23 +316,23 @@ local function getFace0()
 		error("GPS locate error")
 	end
 	if back then
-		face = reverseFace(face)
+		face = reverseDirection(face)
 	end
 	return face
 end
 
-local function getFace()
-	return getFace0()
+local function getDirection()
+	return getDirection0()
 end
 
 local function faceTo(face, cur)
 	local tg = faceTb[string.lower(face)]
 	if not tg then
-		error(string.format("Unknown direction '%s'"), tg)
+		error(string.format("Unknown directionection '%s'"), tg)
 	end
 	cur = cur and faceTb[string.lower(cur)]
 	if not cur then
-		cur = getFace()
+		cur = getDirection()
 	end
 	if cur == tg then
 		return true
@@ -356,7 +383,7 @@ local function digTo(pos)
 		((pos.x and pos.x - x0) or 0),
 		((pos.y and pos.y - y0) or 0),
 		((pos.z and pos.z - z0) or 0)
-	local f = getFace()
+	local f = getDirection()
 	if (f ~= "north") and  not faceTo("north", f) then
 		return false
 	end
@@ -374,7 +401,7 @@ local function digSquareTo(x, z, before, after)
 	local dx, dz =
 		((x and x - x0) or 0),
 		((z and z0 - z) or 0)
-	local f = getFace()
+	local f = getDirection()
 	if (f ~= "north") and not faceTo("north", f) then
 		return false
 	end
@@ -430,13 +457,15 @@ end
 ---- END CLI ----
 
 return {
+	turnLeft = turnLeft,
+	turnRight = turnRight,
+	turnBack = turnBack,
 	forward = forward,
 	back = back,
 	up = up,
 	down = down,
 	left = left,
 	right = right,
-	turnBack = turnBack,
 	digForward = digForward,
 	digBack = digBack,
 	digUp = digUp,
@@ -444,8 +473,9 @@ return {
 	digLeft = digLeft,
 	digRight = digRight,
 	digSquare = digSquare,
-	reverseFace = reverseFace,
-	getFace = getFace,
+	locate = locate,
+	reverseDirection = reverseDirection,
+	getDirection = getDirection,
 	faceTo = faceTo,
 	moveTo = moveTo,
 	digTo = digTo,

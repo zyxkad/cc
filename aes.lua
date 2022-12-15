@@ -3,19 +3,14 @@
 -- original code is from golang.org standard library "crypto/aes"
 
 if not bit then
-	error("bit API not found")
-end
-
-if not math then
-	error("math API not found")
+	error("bit API not found", 2)
 end
 
 local crc32 = crc32
-
 if not crc32 then
 	crc32 = require('crc32')
 	if not crc32 then
-		error("crc32 API not found")
+		error("crc32 API not found", 3)
 	end
 end
 
@@ -536,17 +531,60 @@ local function generateVec(rand)
 	return vec
 end
 
-local Cipher = { key = nil, _enc = nil, _dec = nil }
+local DEFAULT_KEY_FILE = 'id.aes'
+local AES_KEY_FILE_HEADER = 'AES KEY FILE'
 
-function Cipher:new(o, key, vec)
-	o = o or {}
-	setmetatable(o, {__index = self})
+local function saveKey(key, file, cover)
+	local kl = string.len(key)
+	assert(kl == 16 or kl == 24 or kl == 32)
+	file = file or DEFAULT_KEY_FILE
+	if fs.exists(file) and not cover then
+		error('File already exists')
+	end
+	local fd = io.open(file, 'w')
+	if not fd then
+		return nil, 'Cannot open file'
+	end
+	fd:write(AES_KEY_FILE_HEADER)
+	fd:write('\n')
+	fd:write(key)
+	fd:close()
+	return true
+end
+
+local function loadKey(file)
+	file = file or DEFAULT_KEY_FILE
+	local fd = io.open(file, 'r')
+	if not fd then
+		return nil, 'File not exists'
+	end
+	local head = fd:read()
+	if not head or head ~= AES_KEY_FILE_HEADER then
+		return nil, 'Not an AES key file'
+	end
+	local key = fd:read('*all')
+	fd:close()
+	local kl = string.len(key)
+	if kl ~= 16 and kl ~= 24 and kl ~= 32 then
+		return nil, 'Not an AES key len'
+	end
+	return key
+end
+
+local Cipher = {}
+
+function Cipher:new(o, key)
+	o = setmetatable(o or {}, {__index = self})
 	key = key or generateKey()
 	local kl = string.len(key)
 	assert(kl == 16 or kl == 24 or kl == 32)
 	o.key = key
 	o._enc, o._dec = expandKey(key)
 	return o
+end
+
+function Cipher:save(file, cover)
+	return saveKey(self.key, file, cover)
 end
 
 function Cipher:encryptInts(src)
@@ -569,46 +607,32 @@ function Cipher:decrypt(src)
 	return ints2str(decryptBlock(self._dec, str2ints(src)))
 end
 
--- Electronic codebook mode
+local CipherStream = {}
 
-local ECBStream = { chiper = Chiper }
-
-function ECBStream:new(o, chiper)
-	o = o or {}
+function CipherStream:new(o, cipher)
+	assert(o, 'Cannot new a abstract object')
 	setmetatable(o, {__index = self})
-	assert(chiper)
-	o.chiper = chiper
+	assert(cipher, 'Must give a cipher')
+	o.cipher = cipher
 	return o
 end
 
-function ECBStream:encryptInts(src)
-	assert(#src % 4 == 0)
-	local res = {}
-	for i = 1, #src, 4 do
-		local s = self.chiper:encryptInts({table.unpack(src, i, i + 3)})
-		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
-	end
-	return res
+function CipherStream:encryptInts(src)
+	error("Not implemented", 1)
 end
 
-function ECBStream:decryptInts(src)
-	assert(#src % 4 == 0)
-	local res = {}
-	for i = 1, #src, 4 do
-		local s = self.chiper:decryptInts({table.unpack(src, i, i + 3)})
-		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
-	end
-	return res
+function CipherStream:decryptInts(src)
+	error("Not implemented", 1)
 end
 
-function ECBStream:encrypt(src)
+function CipherStream:encrypt(src)
 	local leng = #src
 	local crcd = crc32.sumIEEE(src)
 	local s = str2ints(fitTo16x(src))
 	return ints2str(self:encryptInts({leng, 0, crcd, 0, table.unpack(s)}))
 end
 
-function ECBStream:decrypt(src)
+function CipherStream:decrypt(src)
 	assert(#src % 16 == 0)
 	local res = self:decryptInts(str2ints(src))
 	local leng, crcd = res[1], res[3]
@@ -618,15 +642,41 @@ function ECBStream:decrypt(src)
 	return res
 end
 
+-- Electronic codebook mode
+
+local ECBStream = setmetatable({}, { __index = CipherStream })
+
+function ECBStream:new(o, cipher)
+	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
+	return o
+end
+
+function ECBStream:encryptInts(src)
+	assert(#src % 4 == 0)
+	local res = {}
+	for i = 1, #src, 4 do
+		local s = self.cipher:encryptInts({table.unpack(src, i, i + 3)})
+		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
+	end
+	return res
+end
+
+function ECBStream:decryptInts(src)
+	assert(#src % 4 == 0)
+	local res = {}
+	for i = 1, #src, 4 do
+		local s = self.cipher:decryptInts({table.unpack(src, i, i + 3)})
+		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
+	end
+	return res
+end
+
 -- Cipher block chaining mode
 
-local CBCStream = { chiper = Chiper, enc_vec = nil, dec_vec = nil }
+local CBCStream = setmetatable({}, { __index = CipherStream })
 
-function CBCStream:new(o, chiper, vec)
-	o = o or {}
-	setmetatable(o, {__index = self})
-	assert(chiper)
-	o.chiper = chiper
+function CBCStream:new(o, cipher, vec)
+	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
 	o.enc_vec = vec or {0, 0, 0, 0}
 	o.dec_vec = o.enc_vec
 	return o
@@ -636,8 +686,7 @@ function CBCStream:encryptInts(src)
 	assert(#src % 4 == 0)
 	local res = {}
 	for i = 1, #src, 4 do
-		local v = {table.unpack(src, i, i + 3)}
-		local s = self.chiper:encryptInts(xor_ints(v, self.enc_vec))
+		local s = self.cipher:encryptInts(xor_ints(self.enc_vec, {table.unpack(src, i, i + 3)}))
 		self.enc_vec = s
 		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
 	end
@@ -648,40 +697,20 @@ function CBCStream:decryptInts(src)
 	assert(#src % 4 == 0)
 	local res = {}
 	for i = 1, #src, 4 do
-		local v = {table.unpack(src, i, i + 3)}
-		local s = xor_ints(self.chiper:decryptInts(v), self.dec_vec)
-		self.dec_vec = v
-		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
+		local s = {table.unpack(src, i, i + 3)}
+		local v = xor_ints(self.cipher:decryptInts(s), self.dec_vec)
+		self.dec_vec = s
+		res[i], res[i + 1], res[i + 2], res[i + 3] = v[1], v[2], v[3], v[4]
 	end
-	return res
-end
-
-function CBCStream:encrypt(src)
-	local leng = #src
-	local crcd = crc32.sumIEEE(src)
-	local s = str2ints(fitTo16x(src))
-	return ints2str(self:encryptInts({leng, 0, crcd, 0, table.unpack(s)}))
-end
-
-function CBCStream:decrypt(src)
-	assert(#src % 16 == 0)
-	local res = self:decryptInts(str2ints(src))
-	local leng, crcd = res[1], res[3]
-	assert(res[2] == 0 and res[4] == 0, 'head reserve zero bytes assert failed')
-	res = string.sub(ints2str({table.unpack(res, 5)}), 0, leng)
-	assert(crcd == crc32.sumIEEE(res), 'crc32 check failed')
 	return res
 end
 
 -- Cipher feedback mode
 
-local CFBStream = { chiper = Chiper, enc_vec = nil, dec_vec = nil }
+local CFBStream = setmetatable({}, { __index = CipherStream })
 
-function CFBStream:new(o, chiper, vec)
-	o = o or {}
-	setmetatable(o, {__index = self})
-	assert(chiper)
-	o.chiper = chiper
+function CFBStream:new(o, cipher, vec)
+	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
 	o.enc_vec = vec or {0, 0, 0, 0}
 	o.dec_vec = o.enc_vec
 	return o
@@ -691,7 +720,7 @@ function CFBStream:encryptInts(src)
 	assert(#src % 4 == 0)
 	local res = {}
 	for i = 1, #src, 4 do
-		local s = xor_ints(self.chiper:encryptInts(self.enc_vec), {table.unpack(src, i, i + 3)})
+		local s = xor_ints(self.cipher:encryptInts(self.enc_vec), {table.unpack(src, i, i + 3)})
 		self.enc_vec = s
 		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
 	end
@@ -703,39 +732,19 @@ function CFBStream:decryptInts(src)
 	local res = {}
 	for i = 1, #src, 4 do
 		local s = {table.unpack(src, i, i + 3)}
-		local v = xor_ints(self.chiper:encryptInts(self.dec_vec), s)
+		local v = xor_ints(self.cipher:encryptInts(self.dec_vec), s)
 		self.dec_vec = s
 		res[i], res[i + 1], res[i + 2], res[i + 3] = v[1], v[2], v[3], v[4]
 	end
 	return res
 end
 
-function CFBStream:encrypt(src)
-	local leng = #src
-	local crcd = crc32.sumIEEE(src)
-	local s = str2ints(fitTo16x(src))
-	return ints2str(self:encryptInts({leng, 0, crcd, 0, table.unpack(s)}))
-end
-
-function CFBStream:decrypt(src)
-	assert(#src % 16 == 0)
-	local res = self:decryptInts(str2ints(src))
-	local leng, crcd = res[1], res[3]
-	assert(res[2] == 0 and res[4] == 0, 'head reserve zero bytes assert failed')
-	res = string.sub(ints2str({table.unpack(res, 5)}), 0, leng)
-	assert(crcd == crc32.sumIEEE(res), 'crc32 check failed')
-	return res
-end
-
 -- Output feedback mode
 
-local OFBStream = { chiper = Chiper, enc_vec = nil, dec_vec = nil }
+local OFBStream = setmetatable({}, { __index = CipherStream })
 
-function OFBStream:new(o, chiper, vec)
-	o = o or {}
-	setmetatable(o, {__index = self})
-	assert(chiper)
-	o.chiper = chiper
+function OFBStream:new(o, cipher, vec)
+	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
 	o.enc_vec = vec or {0, 0, 0, 0}
 	o.dec_vec = o.enc_vec
 	return o
@@ -745,8 +754,8 @@ function OFBStream:encryptInts(src)
 	assert(#src % 4 == 0)
 	local res = {}
 	for i = 1, #src, 4 do
-		self.enc_vec = self.chiper:encryptInts(self.enc_vec)
-		local s = xor_ints({table.unpack(src, i, i + 3)}, self.enc_vec)
+		self.enc_vec = self.cipher:encryptInts(self.enc_vec)
+		local s = xor_ints(self.enc_vec, {table.unpack(src, i, i + 3)})
 		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
 	end
 	return res
@@ -756,35 +765,20 @@ function OFBStream:decryptInts(src)
 	assert(#src % 4 == 0)
 	local res = {}
 	for i = 1, #src, 4 do
-		self.dec_vec = self.chiper:encryptInts(self.dec_vec)
-		local s = xor_ints({table.unpack(src, i, i + 3)}, self.dec_vec)
+		self.dec_vec = self.cipher:encryptInts(self.dec_vec)
+		local s = xor_ints(self.dec_vec, {table.unpack(src, i, i + 3)})
 		res[i], res[i + 1], res[i + 2], res[i + 3] = s[1], s[2], s[3], s[4]
 	end
 	return res
 end
 
-function OFBStream:encrypt(src)
-	local leng = #src
-	local crcd = crc32.sumIEEE(src)
-	local s = str2ints(fitTo16x(src))
-	return ints2str(self:encryptInts({leng, 0, crcd, 0, table.unpack(s)}))
-end
-
-function OFBStream:decrypt(src)
-	assert(#src % 16 == 0)
-	local res = self:decryptInts(str2ints(src))
-	local leng, crcd = res[1], res[3]
-	assert(res[2] == 0 and res[4] == 0, 'head reserve zero bytes assert failed')
-	res = string.sub(ints2str({table.unpack(res, 5)}), 0, leng)
-	assert(crcd == crc32.sumIEEE(res), 'crc32 check failed')
-	return res
-end
-
 return {
-	fitTo16x = fitTo16x,
 	generateKey = generateKey,
 	generateVec = generateVec,
+	saveKey = saveKey,
+	loadKey = loadKey,
 	Cipher = Cipher,
+	CipherStream = CipherStream,
 	ECBStream = ECBStream,
 	CBCStream = CBCStream,
 	CFBStream = CFBStream,

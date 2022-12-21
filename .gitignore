@@ -1,3 +1,11 @@
 
 # Mac OS
 .DS_Store
+
+# Tmp
+tmp.*
+*.tmp
+
+# test
+/test/
+/test\.*/

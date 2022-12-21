@@ -5,18 +5,23 @@ if not parallel then
 	error('Need parallel API')
 end
 
-local NAMELIST_OFFSET = 3
+local NAMELIST_OFFSET = 4
 
 local function startswith(s, prefix)
 	return string.find(s, prefix, 1, true) == 1
 end
 
-local function gamedate()
-	local sec = math.floor(os.epoch('ingame') / 1000)
+local function gamedate(blink)
+	local ms = os.epoch('ingame')
+	local sec = math.floor(ms / 1000)
 	local min = math.floor(sec / 60)
 	local hour = math.floor(min / 60)
 	local days = math.floor(hour / 24)
-	return string.format("Day %d %02d:%02d:%02d", days, hour % 24, min % 60, sec % 60)
+	local fmt = "Day %d %02d:%02d"
+	if blink and math.floor(os.clock()) % 2 == 0 then
+		fmt = "Day %d %02d %02d"
+	end
+	return string.format(fmt, days, hour % 24, min % 60)
 end
 
 local function getFrequencies(teleporter, frequency)
@@ -44,12 +49,30 @@ local function getFrequencyHostname(frequency)
 	return string.format("teleporter-[%s]", frequency)
 end
 
-local function termUpdateAt(t, x, y, data)
+local function termUpdateAt(t, x, y, str)
 	t.setCursorPos(x, y)
 	t.clearLine()
-	if data then
-		t.write(data)
+	if str then
+		t.write(str)
 	end
+end
+
+local function termWriteCenter(t, y, str)
+	if type(y) == 'string' then
+		y, str = nil, y
+	end
+	local mWidth, _ = t.getSize()
+	if not y then
+		_, y = t.getCursorPos()
+	end
+	t.setCursorPos(mWidth / 2 - #str / 2, y)
+	t.write(str)
+end
+
+local function termUpdateAtCenter(t, y, str)
+	t.setCursorPos(1, y)
+	t.clearLine()
+	termWriteCenter(t, y, str)
 end
 
 local function waiting_reply(sender, protocol, timeout)
@@ -68,100 +91,6 @@ local function waiting_reply(sender, protocol, timeout)
 	until not sender or src == sender
 	return src, reply, prot
 end
-
--- local osPullEvent, osPullEventRaw = os.pullEvent, os.pullEventRaw
--- local eventListener = {}
--- local timerListener = {}
--- local cleanups = {}
--- local function setTimeout(timeout, callback, ...)
--- 	local arg = {...}
--- 	local tid = os.startTimer(timeout)
--- 	local canceler = function() timerListener[tid] = nil end
--- 	cleanups[#cleanups + 1] = canceler
--- 	timerListener[tid] = function()
--- 		timerListener[tid] = nil
--- 		callback(table.unpack(arg))
--- 		return true
--- 	end
--- 	return canceler
--- end
--- local function setInterval(interval, callback, ...)
--- 	local arg = {...}
--- 	local tid
--- 	local canceled = false
--- 	local canceler = function() canceled = true; timerListener[tid] = nil end
--- 	cleanups[#cleanups + 1] = canceler
--- 	local wrap
--- 	wrap = function()
--- 		timerListener[tid] = nil
--- 		local passed = false
--- 		tid = os.startTimer(interval)
--- 		-- print('new tid:', tid)
--- 		timerListener[tid] = function() passed = true; timerListener[tid] = nil end
--- 		callback(table.unpack(arg))
--- 		if not canceled then
--- 			if passed then
--- 				-- call immedialy
--- 				print('debug', 'a interval tick passed')
--- 				wrap()
--- 			else
--- 				timerListener[tid] = wrap
--- 			end
--- 		end
--- 		return true
--- 	end
--- 	tid = os.startTimer(interval)
--- 	timerListener[tid] = wrap
--- 	return canceler
--- end
--- local eventQueue = nil
--- local function wrappedOsRawEventPuller(filter, noraw)
--- 	if eventQueue then
--- 		local e = eventQueue
--- 		if not filter or e.name == filter then
--- 			eventQueue = e.next
--- 			return table.unpack(e.val)
--- 		end
--- 		local s
--- 		while e.next do
--- 			s, e = e, e.next
--- 			if e.name == filter then
--- 				s.next = e.next
--- 				return table.unpack(e.val)
--- 			end
--- 		end
--- 	end
--- 	while true do
--- 		local event = {osPullEventRaw()}
--- 		local name = event[1]
--- 		if name == 'terminate' then
--- 			print('cleanups:', #cleanups)
--- 			for _, c in ipairs(cleanups) do
--- 				c()
--- 			end
--- 			cleanups = {}
--- 			os.pullEvent, os.pullEventRaw = osPullEvent, osPullEventRaw
--- 			if noraw then
--- 				error('Wrapped Terminate')
--- 			end
--- 		end
--- 		local listener = (name == 'timer' and timerListener[event[2]]) or (eventListener[name])
--- 		if not listener or not listener(table.unpack(event)) then
--- 			if not filter or filter == name then
--- 				return table.unpack(event)
--- 			end
--- 			eventQueue = {
--- 				name = name,
--- 				val = event,
--- 				next = eventQueue,
--- 			}
--- 		end
--- 	end
--- end
--- os.pullEventRaw = wrappedOsRawEventPuller
--- os.pullEvent = function(filter)
--- 	return wrappedOsRawEventPuller(filter, true)
--- end
 
 local function main(arg)
 	local frequency = arg[1]
@@ -215,6 +144,10 @@ local function main(arg)
 	end
 	rednet.host('teleporter', getFrequencyHostname(frequency))
 
+	local curPage = 1
+	local maxPage = 1
+	local eachPage = 0
+
 	function update()
 		local energy, maxEnergy = tpr.getEnergy(), tpr.getMaxEnergy()
 		local targets = getFrequencies(tpr, frequency)
@@ -222,35 +155,71 @@ local function main(arg)
 		local status = tpr.getStatus()
 		local mWidth, mHeight = monitor.getSize()
 		if not mWidth then
-			error('monitor detached')
+			printError('Monitor detached')
+			sleep(3)
+			return false
 		end
+
+		eachPage = (mHeight - NAMELIST_OFFSET)
+		if eachPage <= 0 then
+			printError(string.format('Monitor too small, need at least %d lines', NAMELIST_OFFSET + 1))
+			sleep(10)
+			return false
+		end
+
+		if targets then
+			maxPage = math.ceil(#targets / eachPage)
+			if curPage > maxPage then
+				curPage = maxPage
+			end
+		else
+			curPage = 1
+			maxPage = 1
+		end
+
 		monitor.setTextColor(colors.black)
 		monitor.setBackgroundColor(colors.lightGray)
-		termUpdateAt(monitor, 3, 1, gamedate())
+		termUpdateAt(monitor, 3, 1, gamedate(true))
 		termUpdateAt(monitor, 1, 2, string.format("Energy: %d / %d", energy, maxEnergy))
+		monitor.setBackgroundColor(colors.black)
+		monitor.setTextColor(colors.white)
+		termUpdateAtCenter(monitor, 3, string.format('Page %d / %d', curPage, maxPage))
+		monitor.setTextColor(colors.purple)
+		monitor.setCursorPos(1, 3)
+		monitor.write('[PREV]')
+		monitor.setTextColor(colors.lightBlue)
+		monitor.setCursorPos(mWidth - 5, 3)
+		monitor.write('[NEXT]')
+		termUpdateAt(monitor, 1, 4)
 		if targets then
-			for i, t in ipairs(targets) do
+			for i = 1, eachPage do
 				monitor.setCursorPos(1, i + NAMELIST_OFFSET)
-				if selected and t.key == selected.key then
-					monitor.setTextColor(colors.black)
-					monitor.setBackgroundColor(colors.lightGray)
+				local ind = (curPage - 1) * eachPage + i
+				if ind > #targets then
 					monitor.clearLine()
-					monitor.write(string.format("%d. %s", i, t.key))
-
-					monitor.setCursorPos(mWidth - #status - 3, i + NAMELIST_OFFSET)
-					if status:lower() == 'ready' then
-						monitor.setTextColor(colors.green)
-					else
-						monitor.setTextColor(colors.red)
-					end
-					monitor.setBackgroundColor(colors.black)
-					local status = '['..status..']'
-					monitor.write(status)
 				else
-					monitor.setTextColor(colors.white)
-					monitor.setBackgroundColor(colors.black)
-					monitor.clearLine()
-					monitor.write(string.format("%d. %s", i, t.key))
+					local t = targets[ind]
+					if selected and t.key == selected.key then
+						monitor.setTextColor(colors.black)
+						monitor.setBackgroundColor(colors.lightGray)
+						monitor.clearLine()
+						monitor.write(string.format("%d. %s", ind, t.key))
+
+						monitor.setCursorPos(mWidth - #status - 3, i + NAMELIST_OFFSET)
+						if status:lower() == 'ready' then
+							monitor.setTextColor(colors.green)
+						else
+							monitor.setTextColor(colors.red)
+						end
+						monitor.setBackgroundColor(colors.black)
+						local status = '['..status..']'
+						monitor.write(status)
+					else
+						monitor.setTextColor(colors.white)
+						monitor.setBackgroundColor(colors.black)
+						monitor.clearLine()
+						monitor.write(string.format("%d. %s", ind, t.key))
+					end
 				end
 			end
 			monitor.setTextColor(colors.white)
@@ -273,15 +242,19 @@ local function main(arg)
 	termUpdateAt(monitor, 1, 3)
 
 	function onclick(x, y)
+		local mWidth, mHeight = monitor.getSize()
 		local targets = getFrequencies(tpr, frequency)
-		if NAMELIST_OFFSET < y and y <= #targets + NAMELIST_OFFSET then
-			local tg = targets[y - NAMELIST_OFFSET].key
-			local selected = tpr.hasFrequency()
-			selected = selected and tpr.getFrequency()
-			if not selected or selected.key ~= tg then
-				monitor.setTextColor(colors.yellow)
-				termUpdateAt(monitor, 1, 3, 'Switching...')
-				tpr.setFrequency(tg)
+		if y > NAMELIST_OFFSET then
+			local ind = (curPage - 1) * eachPage + (y - NAMELIST_OFFSET)
+			if ind <= #targets then
+				local tg = targets[ind].key
+				local selected = tpr.hasFrequency()
+				selected = selected and tpr.getFrequency()
+				if not selected or selected.key ~= tg then
+					monitor.setTextColor(colors.yellow)
+					termUpdateAt(monitor, 1, 3, 'Switching...')
+					tpr.setFrequency(tg)
+				end
 				monitor.setTextColor(colors.yellow)
 				termUpdateAt(monitor, 1, 3, 'Trying lookup hoster...')
 				local id = rednet.lookup('teleporter', getFrequencyHostname(tg))
@@ -308,6 +281,16 @@ local function main(arg)
 					sleep(0.5)
 				end
 				termUpdateAt(monitor, 1, 3)
+			end
+		elseif y == 3 then
+			if 1 <= x and x <= 6 then -- click [PREV]
+				if curPage > 1 then
+					curPage = curPage - 1
+				end
+			elseif mWidth - 5 <= x and x <= mWidth then -- click [NEXT]
+				if curPage < maxPage then
+					curPage = curPage + 1
+				end
 			end
 		end
 	end

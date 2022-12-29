@@ -12,10 +12,34 @@ local isProgram = not moduleName or moduleName ~= 'roller'
 
 local function digForwardIfExists(noloop)
 	while not turtle.forward() do
+		if (not turtle.detect()) or (not turtle.dig()) then
+			return false
+		end
 		if noloop then
 			return false
 		end
-		if (not turtle.detect()) or (not turtle.dig()) then
+	end
+	return true
+end
+
+local function digDownIfExists(noloop)
+	while not turtle.down() do
+		if (not turtle.detectDown()) or (not turtle.digDown()) then
+			return false
+		end
+		if noloop then
+			return false
+		end
+	end
+	return true
+end
+
+local function digUpIfExists(noloop)
+	while not turtle.up() do
+		if (not turtle.detectUp()) or (not turtle.digUp()) then
+			return false
+		end
+		if noloop then
 			return false
 		end
 	end
@@ -56,9 +80,41 @@ local function selectItems(items)
 	return false
 end
 
+local function replaceBlock(items)
+	if type(items) == 'string' then
+		items = {items}
+	end
+	if not checkBlock(items) then
+		if not selectItems(items) then
+			return false, 'No replaceable item found'
+		end
+		if turtle.detect() and not turtle.dig() then
+			return false, 'Cannot dig block'
+		end
+		if not turtle.place() then
+			return false, 'Cannot place block'
+		end
+	end
+	return true
+end
+
+local function doUntil(c, failed, max)
+	local i = 0
+	local res
+	repeat
+		i = i + 1
+		res = {c()}
+	until res[1] or (max and i >= max) or (failed and failed(table.unpack(res)))
+	return table.unpack(res)
+end
+
 local base_blocks = {
 	"minecraft:cobblestone",
+	"minecraft:stone",
+	"minecraft:deepslate",
+	"minecraft:cobbled_deepslate",
 	"minecraft:dirt",
+	"minecraft:grass_block",
 	"minecraft:netherrack",
 }
 
@@ -107,6 +163,102 @@ local function railway(n)
 	return true
 end
 
+local function pool0(dx, dz, dy)
+	for y = 1, dy do
+		for z = 1, dz, 2 do
+			for x = 2, dx do
+				doUntil(digForwardIfExists)
+			end
+			doUntil(turtle.turnRight)
+			if z + 1 <= dz then
+				doUntil(digForwardIfExists)
+			end
+			doUntil(turtle.turnRight)
+			for x = 2, dx do
+				doUntil(digForwardIfExists)
+			end
+			if z + 2 <= dz then
+				doUntil(turtle.turnLeft)
+				doUntil(digForwardIfExists)
+				doUntil(turtle.turnLeft)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for z = 2, dz do
+			doUntil(digForwardIfExists)
+		end
+		doUntil(turtle.turnRight)
+		if y ~= dy then
+			doUntil(digDownIfExists)
+		end
+	end
+	return true
+end
+
+local function pool(dx, dz, dy)
+	-- dig and replace border
+	for y = 1, dy do
+		for x = 1, dx do
+			doUntil(turtle.turnLeft)
+			doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			doUntil(turtle.turnRight)
+			if x ~= dx then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for z = 1, dz do
+			doUntil(turtle.turnLeft)
+			doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			doUntil(turtle.turnRight)
+			if z ~= dz then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for x = 1, dx do
+			doUntil(turtle.turnLeft)
+			doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			doUntil(turtle.turnRight)
+			if x ~= dx then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for z = 1, dz do
+			doUntil(turtle.turnLeft)
+			doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			doUntil(turtle.turnRight)
+			if z ~= dz then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		if y ~= dy then
+			doUntil(digDownIfExists)
+		end
+	end
+	-- reset position
+	for y = 2, dy do
+		doUntil(digUpIfExists)
+	end
+	if dx > 2 and dz > 2 then
+		doUntil(digForwardIfExists)
+		doUntil(turtle.turnRight)
+		doUntil(digForwardIfExists)
+		doUntil(turtle.turnLeft)
+		local ok, err = pool0(dx - 2, dz - 2, dy)
+		if ok then
+			doUntil(turtle.back)
+			doUntil(turtle.turnRight)
+			doUntil(turtle.back)
+			doUntil(turtle.turnLeft)
+		end
+		return ok, err
+	end
+	return true
+end
+
 ---- CLI ----
 
 local subCommands = {
@@ -117,6 +269,25 @@ local subCommands = {
 	railway = function(arg, i)
 		local n = tonumber(arg[i + 1])
 		return railway(n)
+	end,
+	pool = function(arg, i)
+		local x, z, y = tonumber(arg[i + 1]), tonumber(arg[i + 2]), tonumber(arg[i + 3])
+		if not digForwardIfExists() then
+			return false, 'Cannot dig forward'
+		end
+		if not digDownIfExists() then
+			return false, 'Cannot dig down'
+		end
+		local ok, err = pool(x, z, y)
+		if ok then
+			turtle.up()
+			turtle.back()
+		end
+		return ok, err
+	end,
+	pool0 = function(arg, i)
+		local x, z, y = tonumber(arg[i + 1]), tonumber(arg[i + 2]), tonumber(arg[i + 3])
+		return pool0(x, z, y)
 	end,
 }
 
@@ -139,7 +310,14 @@ local function main(arg)
 	local subcmd = arg[1]
 	local fn = subCommands[subcmd]
 	if fn then
-		fn(arg, 1)
+		local ok, err = fn(arg, 1)
+		if not ok then
+			if err then
+				printError('command failed:', err)
+			else
+				printError('command failed')
+			end
+		end
 	else
 		error(string.format("Unknown subcommand '%s'", subcmd))
 	end
@@ -153,4 +331,7 @@ end
 
 return {
 	tunnel = tunnel,
+	railway = railway,
+	pool = pool,
+	pool0 = pool0,0
 }

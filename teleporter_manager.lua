@@ -6,6 +6,7 @@ if not parallel then
 end
 
 local NAMELIST_OFFSET = 4
+local HINT_LINE = 3
 
 local function startswith(s, prefix)
 	return string.find(s, prefix, 1, true) == 1
@@ -65,7 +66,7 @@ local function termWriteCenter(t, y, str)
 	if not y then
 		_, y = t.getCursorPos()
 	end
-	t.setCursorPos(mWidth / 2 - #str / 2, y)
+	t.setCursorPos(mWidth / 2 - #str / 2 + 1, y)
 	t.write(str)
 end
 
@@ -147,6 +148,13 @@ local function main(arg)
 	local curPage = 1
 	local maxPage = 1
 	local eachPage = 0
+	local prevPBtn = '[PREV]'
+	local nextPBtn = '[NEXT]'
+	local shortScreen = false
+
+	monitor.setTextColor(colors.white)
+	monitor.setBackgroundColor(colors.black)
+	monitor.clear()
 
 	function update()
 		local energy, maxEnergy = tpr.getEnergy(), tpr.getMaxEnergy()
@@ -158,6 +166,9 @@ local function main(arg)
 			printError('Monitor detached')
 			sleep(3)
 			return false
+		end
+		if mWidth < 26 then
+			shortScreen = true
 		end
 
 		eachPage = (mHeight - NAMELIST_OFFSET)
@@ -177,20 +188,35 @@ local function main(arg)
 			maxPage = 1
 		end
 
+		local pageFormat = '%d / %d'
+		if shortScreen then
+			prevPBtn = '[-]'
+			nextPBtn = '[+]'
+		else
+			pageFormat = 'Page '..pageFormat
+			prevPBtn = '[PREV]'
+			nextPBtn = '[NEXT]'
+		end
+
 		monitor.setTextColor(colors.black)
 		monitor.setBackgroundColor(colors.lightGray)
-		termUpdateAt(monitor, 3, 1, gamedate(true))
-		termUpdateAt(monitor, 1, 2, string.format("Energy: %d / %d", energy, maxEnergy))
+		termUpdateAtCenter(monitor, 1, gamedate(true))
+		local energyFormat
+		if shortScreen then
+			energyFormat = 'E=%d/%d'
+		else
+			energyFormat = 'Energy: %d / %d'
+		end
+		termUpdateAt(monitor, 1, 2, energyFormat:format(energy, maxEnergy))
 		monitor.setBackgroundColor(colors.black)
 		monitor.setTextColor(colors.white)
-		termUpdateAtCenter(monitor, 3, string.format('Page %d / %d', curPage, maxPage))
+		termUpdateAtCenter(monitor, 4, pageFormat:format(curPage, maxPage))
 		monitor.setTextColor(colors.purple)
-		monitor.setCursorPos(1, 3)
-		monitor.write('[PREV]')
+		monitor.setCursorPos(1, 4)
+		monitor.write(prevPBtn)
 		monitor.setTextColor(colors.lightBlue)
-		monitor.setCursorPos(mWidth - 5, 3)
-		monitor.write('[NEXT]')
-		termUpdateAt(monitor, 1, 4)
+		monitor.setCursorPos(mWidth - #nextPBtn + 1, 4)
+		monitor.write(nextPBtn)
 		if targets then
 			for i = 1, eachPage do
 				monitor.setCursorPos(1, i + NAMELIST_OFFSET)
@@ -199,26 +225,42 @@ local function main(arg)
 					monitor.clearLine()
 				else
 					local t = targets[ind]
+					local line
+					if shortScreen then
+						line = string.format('%s', t.key)
+					else
+						line = string.format('%d. %s', ind, t.key)
+					end
 					if selected and t.key == selected.key then
 						monitor.setTextColor(colors.black)
 						monitor.setBackgroundColor(colors.lightGray)
 						monitor.clearLine()
-						monitor.write(string.format("%d. %s", ind, t.key))
+						monitor.write(line)
 
-						monitor.setCursorPos(mWidth - #status - 3, i + NAMELIST_OFFSET)
+						local status = status
 						if status:lower() == 'ready' then
+							if shortScreen then
+								status = 'R'
+							end
 							monitor.setTextColor(colors.green)
 						else
+							if shortScreen then
+								status = 'N'
+							end
 							monitor.setTextColor(colors.red)
 						end
 						monitor.setBackgroundColor(colors.black)
-						local status = '['..status..']'
-						monitor.write(status)
+						if shortScreen then
+							monitor.setCursorPos(mWidth - #status - 1, i + NAMELIST_OFFSET)
+						else
+							monitor.setCursorPos(mWidth - #status - 3, i + NAMELIST_OFFSET)
+						end
+						monitor.write('['..status..']')
 					else
 						monitor.setTextColor(colors.white)
 						monitor.setBackgroundColor(colors.black)
 						monitor.clearLine()
-						monitor.write(string.format("%d. %s", ind, t.key))
+						monitor.write(line)
 					end
 				end
 			end
@@ -237,10 +279,6 @@ local function main(arg)
 		end
 	end
 
-	monitor.setTextColor(colors.white)
-	monitor.setBackgroundColor(colors.black)
-	termUpdateAt(monitor, 1, 3)
-
 	function onclick(x, y)
 		local mWidth, mHeight = monitor.getSize()
 		local targets = getFrequencies(tpr, frequency)
@@ -252,42 +290,42 @@ local function main(arg)
 				selected = selected and tpr.getFrequency()
 				if not selected or selected.key ~= tg then
 					monitor.setTextColor(colors.yellow)
-					termUpdateAt(monitor, 1, 3, 'Switching...')
+					termUpdateAt(monitor, 1, HINT_LINE, 'Switching...')
 					tpr.setFrequency(tg)
 				end
 				monitor.setTextColor(colors.yellow)
-				termUpdateAt(monitor, 1, 3, 'Trying lookup hoster...')
+				termUpdateAt(monitor, 1, HINT_LINE, 'Trying lookup hoster...')
 				local id = rednet.lookup('teleporter', getFrequencyHostname(tg))
 				if id then
 					monitor.setTextColor(colors.yellow)
-					termUpdateAt(monitor, 1, 3, 'Querying remote teleporter...')
+					termUpdateAt(monitor, 1, HINT_LINE, 'Querying remote teleporter...')
 					rednet.send(id, frequency, 'teleporter-query')
 					local src, reply = waiting_reply(id, 'teleporter-query-reply', 3)
 					if src then
 						if reply == 'busy' then
 							monitor.setTextColor(colors.red)
-							termUpdateAt(monitor, 1, 3, 'Remote is BUZY')
+							termUpdateAt(monitor, 1, HINT_LINE, 'Remote is BUZY')
 						elseif reply == 'ok' then
 							monitor.setTextColor(colors.green)
-							termUpdateAt(monitor, 1, 3, 'Remote synced')
+							termUpdateAt(monitor, 1, HINT_LINE, 'Remote synced')
 						elseif startswith(reply, 'error:') then
 							monitor.setTextColor(colors.red)
-							termUpdateAt(monitor, 1, 3, reply:sub(7))
+							termUpdateAt(monitor, 1, HINT_LINE, reply:sub(7))
 						end
 					else
 						monitor.setTextColor(colors.red)
-						termUpdateAt(monitor, 1, 3, "Cannot connect to remote port")
+						termUpdateAt(monitor, 1, HINT_LINE, "Cannot connect to remote port")
 					end
 					sleep(0.5)
 				end
-				termUpdateAt(monitor, 1, 3)
+				termUpdateAt(monitor, 1, HINT_LINE)
 			end
-		elseif y == 3 then
-			if 1 <= x and x <= 6 then -- click [PREV]
+		elseif y == 4 then
+			if 1 <= x and x < 1 + #prevPBtn then -- click [PREV]
 				if curPage > 1 then
 					curPage = curPage - 1
 				end
-			elseif mWidth - 5 <= x and x <= mWidth then -- click [NEXT]
+			elseif mWidth - #nextPBtn < x and x <= mWidth then -- click [NEXT]
 				if curPage < maxPage then
 					curPage = curPage + 1
 				end
@@ -298,7 +336,7 @@ local function main(arg)
 	parallel.waitForAny(function()
 		while true do
 			update()
-			sleep(0.5)
+			sleep(0.1)
 		end
 	end, function()
 		while true do

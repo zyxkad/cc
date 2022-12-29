@@ -9,16 +9,66 @@ if not parallel then
 	error('Need parallel API')
 end
 
----BEGIN configs---
+---BEGIN default configs---
+configPath = 'reactor.cfg'
+
 defaultEnabled = false
 normalBurnRate = 1.0
-overloadBurnRate = 10.0
+overloadBurnRate = 0 -- 0 means the max burn rate
 alarmThreshold = 0.55
 safeCooldownTime = 1.5
 forceShutThreshold = 0.2
 restartThreshold = 0.5
 maxHeatedCoolant = 1.01
----END configs---
+maxNuclearWaste = 0.9
+maxTemperature = 850 -- 850 °C
+---END default configs---
+
+local ok, config_loader = pcall(require, 'config')
+if ok then
+	if fs.exists(configPath) then
+		local cfg = config_loader.load(configPath, {
+			defaultEnabled = defaultEnabled,
+			normalBurnRate = normalBurnRate,
+			overloadBurnRate = overloadBurnRate,
+			alarmThreshold = alarmThreshold,
+			safeCooldownTime = safeCooldownTime,
+			forceShutThreshold = forceShutThreshold,
+			restartThreshold = restartThreshold,
+			maxHeatedCoolant = maxHeatedCoolant,
+			maxNuclearWaste = maxNuclearWaste,
+			maxTemperature = maxTemperature,
+		})
+		defaultEnabled = cfg.defaultEnabled
+		normalBurnRate = cfg.normalBurnRate
+		overloadBurnRate = cfg.overloadBurnRate
+		alarmThreshold = cfg.alarmThreshold
+		safeCooldownTime = cfg.safeCooldownTime
+		forceShutThreshold = cfg.forceShutThreshold
+		restartThreshold = cfg.restartThreshold
+		maxHeatedCoolant = cfg.maxHeatedCoolant
+		maxNuclearWaste = cfg.maxNuclearWaste
+		maxTemperature = cfg.maxTemperature
+	else
+		printError(('Config file not exists, saving default config at "%s"'):format(configPath))
+		config_loader.save(configPath, {
+			defaultEnabled = defaultEnabled,
+			normalBurnRate = normalBurnRate,
+			overloadBurnRate = overloadBurnRate,
+			alarmThreshold = alarmThreshold,
+			safeCooldownTime = safeCooldownTime,
+			forceShutThreshold = forceShutThreshold,
+			restartThreshold = restartThreshold,
+			maxHeatedCoolant = maxHeatedCoolant,
+			maxNuclearWaste = maxNuclearWaste,
+			maxTemperature = maxTemperature,
+		})
+	end
+else
+	printError('module "config.lua" not found')
+end
+
+---BEGIN status---
 
 enabled = defaultEnabled
 statusBtn = ''
@@ -38,6 +88,8 @@ heatedCoolant = 0.0
 nuclearWaste = 0
 nuclearWasteFilled = 0.0
 damage = 0.0
+
+---END status---
 
 local function formatSec2hours(sec, blink)
 	local sec2 = math.floor(sec)
@@ -99,7 +151,7 @@ local function onUpdateData(td, reactor, overloadIn_side)
 	local lastFuelAmount = fuelAmount
 	fuelAmount = reactor.getFuel().amount
 	fuelFilled = reactor.getFuelFilledPercentage()
-	fuelRate = (fuelAmount - lastFuelAmount) / td
+	fuelRate = reactor.getActualBurnRate() * 20 -- tick to second
 	local lastCoolant = coolant
 	coolant = reactor.getCoolantFilledPercentage()
 	coolantRate = (coolant - lastCoolant) / td
@@ -119,7 +171,8 @@ local function onTick(reactor, alarm_side)
 		(reactorRunning or coolant >= restartThreshold) and
 		coolant + coolantRate * safeCooldownTime > 0.05 and
 		heatedCoolant < maxHeatedCoolant and
-		nuclearWasteFilled < 0.9
+		nuclearWasteFilled < maxNuclearWaste and
+		temperature - 273 < maxTemperature
 	local alarm = false
 	if reactorRunning ~= shouldRun then
 		if shouldRun then
@@ -136,9 +189,13 @@ local function onTick(reactor, alarm_side)
 			end
 		end
 	end
-	local burnRate
-	if shouldRun and overloading then
-		burnRate = overloadBurnRate
+	local burnRate = 0
+	if overloading then
+		if overloadBurnRate > 0 then
+			burnRate = overloadBurnRate
+		else
+			burnRate = reactor.getMaxBurnRate()
+		end
 	else
 		burnRate = normalBurnRate
 	end
@@ -208,9 +265,11 @@ local function updateMonitor(monitor)
 	monitor.setTextColor(colors.white)
 	monitor.write(' | ')
 	local tempC = temperature - 273 -- use °C insteat of K
-	if tempC >= 150 then
+	if tempC >= maxTemperature then
+		monitor.setTextColor(colors.red)
+	elseif tempC >= 500 then
 		monitor.setTextColor(colors.orange)
-	elseif tempC >= 105 then
+	elseif tempC >= 250 then
 		monitor.setTextColor(colors.yellow)
 	elseif tempC >= 100 then
 		monitor.setTextColor(colors.white)
@@ -223,7 +282,7 @@ local function updateMonitor(monitor)
 	termUpdateAt(monitor, 1, 4, '   Fuel')
 	monitor.setTextColor(colors.white)
 	monitor.write(' | ')
-	monitor.write(string.format('%dmB [%+3.2fmB/s]', fuelAmount, fuelRate))
+	monitor.write(string.format('%dmB [%.1fmB/s]', fuelAmount, fuelRate))
 	--- update coolant
 	monitor.setTextColor(colors.cyan)
 	termUpdateAt(monitor, 1, 5, 'Coolant')
@@ -260,7 +319,7 @@ local function updateMonitor(monitor)
 	else
 		monitor.setTextColor(colors.white)
 	end
-	monitor.write(string.format('%.1f%%', damage * 100))
+	monitor.write(string.format('%.1f%%', damage))
 end
 
 local function main(args)

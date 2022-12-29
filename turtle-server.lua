@@ -112,7 +112,6 @@ end
 
 local function main()
 	-- print("Starting turtle server with arguments:", table.concat(arg, ", "))
-
 	local id = arg[1]
 	if not id then
 		error("You must give an ID to the turtle")

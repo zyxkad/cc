@@ -5,15 +5,18 @@ if not turtle then
 	error('turtle API not found')
 end
 
+local debuging = false
+
 local miner_frequency = os.getComputerLabel()
-local emergency_frequency = miner_frequency..'_emergency'
+local emergency_frequency = miner_frequency..'Err'
 local digital_miner_id = 'mekanism:digital_miner'
 local cable_id = 'mekanism:advanced_universal_cable'
 local transporter_id = 'mekanism:advanced_logistcial_transporter'
 local teleporter_id = 'mekanism:teleporter'
 local quantum_porter_id = 'mekanism:quantum_entangloporter'
 local diamond_pickaxe_id = 'minecraft:diamond_pickaxe'
-local wireless_modem_id = 'computercraft:wireless_modem_advanced'
+local ender_wireless_modem_id = 'computercraft:wireless_modem_advanced'
+local wireless_modem_id = 'computercraft:wireless_modem_normal'
 
 local function doUntil(c, failed, max)
 	local i = 0
@@ -86,6 +89,24 @@ local function hasFrequency(teleporter, frequency)
 		end
 	end
 	return false
+end
+
+local function equipLeftModem()
+	return equipLeft(ender_wireless_modem_id) or equipLeft(wireless_modem_id)
+end
+
+local function rewrite(str)
+	local _, y = term.getCursorPos()
+	term.setCursorPos(1, y)
+	term.clearLine()
+	term.write(str)
+end
+
+local function reprint(...)
+	local _, y = term.getCursorPos()
+	term.setCursorPos(1, y)
+	term.clearLine()
+	print(...)
 end
 
 local function place()
@@ -175,33 +196,74 @@ local function destroy()
 	return true
 end
 
-local function placeMinerAndDestroy()
-	print('Placing...')
+local function broadcastProcess(modem, remain)
+	rednet.open(peripheral.getName(modem))
+	local monitors = {rednet.lookup('miner_monitor')}
+	for _, m in ipairs(monitors) do
+		rednet.send(m, {
+			id = miner_frequency,
+			typ = 'process',
+			remain = remain,
+		}, 'digital_miner')
+	end
+	rednet.close(peripheral.getName(modem))
+end
+
+local function placeMinerAndDestroy(modem)
+	rewrite('Placing...')
 	local ok, err = place()
 	if not ok then
+		print()
 		return false, err
 	end
 	local miner = peripheral.wrap('top')
-	print('Starting...')
+	rewrite('Starting...')
 	miner.start()
-	print('Polling...')
+	rewrite('Polling...')
+	sleep(1)
 	local remain = miner.getToMine()
+	local i = 0
 	while remain ~= 0 do
-		print(string.format('%d ores left.', remain))
-		sleep(3)
+		local _, y = term.getCursorPos()
+		i = (i + 1) % 3
+		rewrite(string.format('%d ores left.'..(string.rep('.', i)), remain))
+		sleep(0.05)
 		remain = miner.getToMine()
+		if modem then
+			broadcastProcess(modem, 'mining', remain)
+		end
 	end
-	print('Stopping...')
+	rewrite('Stopping...')
 	miner.stop()
-	print('Destroying...')
+	rewrite('Destroying...')
+	if modem then
+		broadcastProcess(modem, 'destorying')
+	end
 	ok, err = destroy()
 	if not ok then
+		print()
+		if modem then
+			broadcastProcess(modem, 'error', err)
+		end
 		return false, err
 	end
 	return true
 end
 
 local cached_position_path = 'position.txt'
+
+local function broadcastPos(modem, x, y, z)
+	rednet.open(peripheral.getName(modem))
+	local monitors = {rednet.lookup('miner_monitor')}
+	for _, m in ipairs(monitors) do
+		rednet.send(m, {
+			id = miner_frequency,
+			typ = 'pos',
+			x = x, y = y, z = z,
+		}, 'digital_miner')
+	end
+	rednet.close(peripheral.getName(modem))
+end
 
 local function placeAndForward(radious, islaunch)
 	radious = radious or 32
@@ -215,25 +277,28 @@ local function placeAndForward(radious, islaunch)
 			y0 = tonumber(fd:read())
 			z0 = tonumber(fd:read())
 			if z0 and y0 and z0 then
-				print('Found cached position:', x0, y0, z0)
+				print('Cached pos:', x0, y0, z0)
 				oldpos = true
 			end
 		end
-		print('Locating...')
-		equipLeft(wireless_modem_id)
-		local x, y, z = gps.locate(2, true)
+		rewrite('Locating...')
+		equipLeftModem()
+		local x, y, z = gps.locate(2, debuging)
 		if not(x and y and z) then
+			print()
 			return false, 'Cannot locate current position'
 		end
-		print('Current pos:', x, y, z)
+		reprint('Current pos:', x, y, z)
+		sleep(1)
 		if oldpos then
 			if x ~= x0 or y ~= y0 or z ~= z0 then
 				printError('ERROR: position not match')
 				return false, 'position not match, program break'
 			end
-			print('Destorying old miner...')
+			rewrite('Destorying old miner...')
 			local ok, err = destroy()
 			if not ok then
+				print()
 				return false, err
 			end
 			fs.delete(cached_position_path)
@@ -242,26 +307,38 @@ local function placeAndForward(radious, islaunch)
 
 	local x, y, z
 	while true do
-		print('Locating...')
-		equipLeft(wireless_modem_id)
-		x, y, z = gps.locate(2, true)
+		rewrite('Locating...')
+		equipLeftModem()
+		x, y, z = gps.locate(2, debuging)
 		if not(x and y and z) then
+			print()
 			return false, 'Cannot locate current position'
 		end
-		print('Pos:', x, y, z)
+		reprint('Pos:', x, y, z)
+		local modem = peripheral.wrap('left')
+		rewrite('Broadcasting position...')
+		broadcastPos(modem, x, y, z)
 		local fd = io.open('position.txt', 'w')
 		fd:write(string.format('%d\n%d\n%d', x, y, z))
 		fd:close()
-		local ok, err = placeMinerAndDestroy()
+		sleep(1)
+		local ok, err = placeMinerAndDestroy(modem)
 		if not ok then
 			return false, err
 		end
+		equipLeftModem()
+		broadcastProcess(modem, 'moving')
 		fs.delete(cached_position_path)
+		rewrite('Moving...')
 		for i = 1, 2 * radious do
 			ok, _, err = doUntil(turtle.forward, 3)
 			if not ok then
+				print()
+				broadcastProcess(modem, 'error', err or 'Turtle cannot move forward')
 				return false, err
 			end
+			rewrite(string.format('Moved %d blocks...', i))
+			broadcastPos(modem, x, y, z)
 		end
 	end
 end
@@ -281,6 +358,7 @@ local subCommands = {
 		local islaunch = args[i + 2] == 'launch' or (not radious and args[i + 1] == 'launch')
 		local ok, err = placeAndForward(radious, islaunch)
 		if not ok then
+			printError(err or 'Failed by unknown reason')
 			print('Placing emergency teleporter...')
 			if not selectItem(teleporter_id) then
 				return false, string.format('No item [%s] found', teleporter_id)
@@ -296,7 +374,7 @@ local subCommands = {
 			end
 			teleporter.setFrequency(emergency_frequency)
 		end
-		return ok, err
+		return ok
 	end
 }
 

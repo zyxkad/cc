@@ -14,7 +14,8 @@ end
 
 local global_aes_key, err = aes.loadKey()
 if not global_aes_key then
-	error('Cannot load global aes key: ' .. err)
+	global_aes_key = string.rep(' ', 16)
+	-- error('Cannot load global aes key: ' .. err)
 end
 
 local hmac = hmac

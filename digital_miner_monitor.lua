@@ -64,17 +64,27 @@ local function listenData()
 		local l = datas[msg.id]
 		if not l or l.i == id then
 			if msg.typ == 'pos' then
-				local d = {
-					t = getTime(),
-					i = id,
-					id = msg.id,
-					x = msg.x,
-					y = msg.y,
-					z = msg.z,
-					remain = -1,
-				}
-				datas[msg.id] = d
-				local path = string.format('last_pos/%s.json', msg.id)
+				local d = datas[msg.id]
+				if d then
+					d.t = getTime()
+					d.x = msg.x
+					d.y = msg.y
+					d.z = msg.z
+					d.fuel = msg.fuel
+				else
+					d = {
+						t = getTime(),
+						i = id,
+						id = msg.id,
+						x = msg.x,
+						y = msg.y,
+						z = msg.z,
+						fuel = msg.fuel,
+						msg = 'unknown',
+					}
+					datas[msg.id] = d
+				end
+				local path = string.format('last_pos/%s.data', msg.id)
 				local fd, err = io.open(path, 'w')
 				if fd then
 					fd:write(textutils.serialiseJSON(d))
@@ -82,11 +92,22 @@ local function listenData()
 				else
 					printError('Cannot write to file :', path, ':', err)
 				end
-			elseif msg.typ == 'process' then
+			elseif msg.typ == 'mining' then
 				local d = datas[msg.id]
 				if d then
 					d.t = getTime()
-					d.remain = msg.remain
+					d.msg = string.format('remain=%d', msg.data)
+				end
+			elseif msg.typ == 'error' then
+				local d = datas[msg.id]
+				if d then
+					printError('ERR:', msg.data)
+					d.msg = string.format('err=%s', msg.data)
+				end
+			else
+				local d = datas[msg.id]
+				if d then
+					d.msg = string.format('%s: %s', msg.typ, msg.data)
 				end
 			end
 		end
@@ -105,12 +126,25 @@ local function renderData(monitor)
 	monitor.setBackgroundColor(colors.black)
 	for _, d in pairs(datas) do
 		termUpdateAt(monitor, 1, i, string.format(' %s | %d %d %d', d.id, d.x, d.y, d.z))
-		termUpdateAt(monitor, 1, i + 1, string.format('  | %s | %d', formatTime(d.t), d.remain))
+		termUpdateAt(monitor, 1, i + 1, string.format('  | %s | %s | %s', formatTime(d.t), tostring(d.fuel), d.msg))
 		i = i + 2
 	end
 	for n = i, mHeight do
 		monitor.setCursorPos(1, n)
 		monitor.clearLine()
+	end
+end
+
+local function loadData()
+	for _, f in ipairs(fs.list('last_pos')) do
+		local fd = io.open('last_pos'..'/'..f)
+		if fd then
+			local con = fd:read('a')
+			if con then
+				local d = textutils.unserialiseJSON(con)
+				datas[d.id] = d
+			end
+		end
 	end
 end
 
@@ -136,6 +170,9 @@ function main(args)
 
 	peripheral.find('modem', rednet.open)
 	rednet.host('miner_monitor', string.format('miner_monitor_%d', os.computerID()))
+
+	loadData()
+
 	parallel.waitForAny(function()
 		listenData()
 	end, function()

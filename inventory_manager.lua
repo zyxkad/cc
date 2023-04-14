@@ -47,7 +47,7 @@ function main(args)
 	while true do
 		local event, p, msg = os.pullEvent('chat')
 		if p == owner then
-			if msg == '#dump' then
+			if msg == '#dump' or msg == 'dump' then
 				local start = os.clock()
 				local ls = iv.list()
 				local total = 0

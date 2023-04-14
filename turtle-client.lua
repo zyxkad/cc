@@ -15,7 +15,8 @@ end
 
 local global_aes_key, err = aes.loadKey()
 if not global_aes_key then
-	error('Cannot load global aes key: ' .. err)
+	global_aes_key = string.rep(' ', 16)
+	-- error('Cannot load global aes key: ' .. err)
 end
 
 local hmac = hmac
@@ -38,10 +39,10 @@ local function locate(tid, id)
 	msg.hmac = h
 	rednet.send(tid, msg, id)
 	local _, reply = rednet.receive(string.format("reply-%s", id), 3)
-	if not reply or type(reply) ~= 'table' then
+	if not reply or type(reply) ~= 'table' or type(reply[1]) ~= 'table' then
 		return nil
 	end
-	return reply[1], reply[2], reply[3]
+	return reply[1][1], reply[1][2], reply[1][3]
 end
 
 local function getFuelLevel(tid, id)
@@ -52,10 +53,10 @@ local function getFuelLevel(tid, id)
 	msg.hmac = h
 	rednet.send(tid, msg, id)
 	local _, reply = rednet.receive(string.format("reply-%s", id), 3)
-	if not reply or type(reply) ~= 'table' then
+	if not reply or type(reply) ~= 'table' or type(reply[1]) ~= 'table' then
 		return nil
 	end
-	return reply[1], reply[2]
+	return reply[1][1], reply[1][2]
 end
 
 local function main()
@@ -115,7 +116,7 @@ local function main()
 			msg = { c = 'turnRight', a = nil }
 		elseif k == keys.space then
 			msg = { c = 'up', a = nil }
-		elseif k == keys.leftShift or k == keys.z then
+		elseif k == keys.leftShift or k == keys.x then
 			msg = { c = 'down', a = nil }
 		elseif k == keys.j then
 			msg = { c = 'dig', a = nil }
@@ -123,8 +124,16 @@ local function main()
 			msg = { c = 'digUp', a = nil }
 		elseif k == keys.k then
 			msg = { c = 'digDown', a = nil }
+		elseif k == keys.t then
+			msg = { c = 'placeUp', a = nil }
 		elseif k == keys.y then
 			msg = { c = 'place', a = nil }
+		elseif k == keys.h then
+			msg = { c = 'placeDown', a = nil }
+		elseif k == keys.n then
+			msg = { c = 'drop', a = nil }
+		elseif k == keys.m then
+			msg = { c = 'suck', a = nil }
 		end
 		if msg then
 			local exp = getSecond() + 3
@@ -148,7 +157,7 @@ local function main()
 			else
 				print('Fuel: ERROR')
 			end
-			print(reply)
+			print(textutils.serialise(reply))
 		else
 			local x, y, z = locate(tid, id)
 			local fl, fm = getFuelLevel(tid, id)

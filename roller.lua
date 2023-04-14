@@ -333,5 +333,5 @@ return {
 	tunnel = tunnel,
 	railway = railway,
 	pool = pool,
-	pool0 = pool0,0
+	pool0 = pool0,
 }

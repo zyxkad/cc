@@ -11,8 +11,8 @@ end
 
 local crafter_id = 'create:mechanical_crafter'
 local rsBridge_id = 'rsBridge'
-local blockReader_id = 'blockReader'
 local redstoneIntegrator_id = 'redstoneIntegrator'
+local blockReader_id = 'blockReader'
 
 ---BEGIN default configs---
 local defConfigPath = 'crafter.cfg'
@@ -21,7 +21,7 @@ local cfg = {
 	emptyBeforeCraft = true,
 	waitUnitlIdle = true,
 
-	rsBridge = rsBridge..'_0',
+	rsBridge = rsBridge_id..'_0',
 	redstoneIntegrator = '', -- leave it blank to output redstone signal from the computer
 	triggerSide = 'top',
 	blockReader = blockReader_id..'_0'
@@ -67,7 +67,9 @@ local function empty(crafters, rsBridge)
 		local c = crafters[i]
 		local d = c.getItemDetail(1)
 		if d then
-			rsBridge.importItemFromPeripheral({name=d.name}, peripheral.getName(c))
+			print(string.format('exporting %s from %d', d.name, i))
+			local n = rsBridge.importItemFromPeripheral({name=d.name}, peripheral.getName(c))
+			print(n)
 		end
 	end
 end
@@ -98,18 +100,23 @@ local function craft(recipe, crafters, rsBridge, blockReader, options)
 
 	for i = 1, 21 do
 		local item = recipe[i]
-		assert(type(item) == 'string')
-		local c = crafters[i]
-		local amount = rsBridge.exportItemToPeripheral({name=item}, peripheral.getName(c))
-		if amount == 0 then
-			return false, string.format('Cannot export item[%s] to crafter [%d]%s', item, i, peripheral.getName(c))
+		if type(item) ~= 'nil' then
+			assert(type(item) == 'string', string.format('type of item name must be a string, got %s', type(item)))
+			local c = crafters[i]
+			local amount = rsBridge.exportItemToPeripheral({name=item}, peripheral.getName(c))
+			if amount == 0 then
+				return false, string.format('Cannot export item[%s] to crafter [%d]%s', item, i, peripheral.getName(c))
+			end
 		end
 	end
 
 	rsInt.setOutput(rsSide, true)
-	sleep(0.05) -- wait one tick
+	sleep(0.05) -- wait a tick
 	rsInt.setOutput(rsSide, false)
 	if cfg.waitUnitlIdle then
+		if blockReader == nil then
+			return false, 'No blockReader was given'
+		end
 		local d
 		repeat
 			sleep(0) -- yield
@@ -130,7 +137,7 @@ local function main(args)
 
 	local rsBridge = peripheral.wrap(cfg.rsBridge)
 	if not rsBridge then
-		printError(string.format('Cannot find peripheral %s', cfg.rsBridge))
+		printError(string.format('Cannot find rsBridge %s', cfg.rsBridge))
 		return
 	elseif peripheral.getType(rsBridge) ~= rsBridge_id then
 		printError(string.format('%s is not a rsBridge', cfg.rsBridge))
@@ -141,30 +148,53 @@ local function main(args)
 		local Cid = cfg[string.format('C%d', i)]
 		local Cp = peripheral.wrap(Cid)
 		if not Cp then
-			printError(string.format('Cannot find peripheral %s', Cid))
+			printError(string.format('Cannot find crafter %s', Cid))
 			return
 		elseif peripheral.getType(Cp) ~= crafter_id then
 			printError(string.format("%s is not a create's mechanical crafter", Cid))
 			return
 		end
+		crafters[i] = Cp
 	end
 	local rsInt = nil
-	if cfg.redstoneIntegrator then
+	if cfg.redstoneIntegrator and #cfg.redstoneIntegrator > 0 then
+		rsInt = peripheral.wrap(cfg.redstoneIntegrator)
 		if not rsInt then
-			printError(string.format('Cannot find peripheral %s', cfg.redstoneIntegrator))
+			printError(string.format('Cannot find redstoneIntegrator %s', cfg.redstoneIntegrator))
 			return
 		elseif peripheral.getType(rsInt) ~= redstoneIntegrator_id then
 			printError(string.format('%s is not a redstoneIntegrator', cfg.redstoneIntegrator))
 			return
 		end
 	end
+	local blockReader = nil
+	if cfg.blockReader and #cfg.blockReader > 0 then
+		blockReader = peripheral.wrap(cfg.blockReader)
+		if not blockReader then
+			printError(string.format('Cannot find blockReader %s', cfg.blockReader))
+			return
+		elseif peripheral.getType(blockReader) ~= blockReader_id then
+			printError(string.format('%s is not a blockReader', cfg.blockReader))
+			return
+		end
+	end
 
-	-- craft(recipe)
-	peripheral.waitForAny(function()
+	parallel.waitForAny(function()
 		while true do
 			sleep(0.1)
+		end
+	end, function()
+		local recipe = {
+			[1] = 'minecraft:stone',
+			[2] = 'minecraft:stone',
+			[5] = 'minecraft:stone',
+			[6] = 'minecraft:stone',
+		}
+		local ok, err = craft(recipe, crafters, rsBridge, blockReader)
+		if not ok then
+			printError('Craft err:', err)
 		end
 	end)
 end
 
--- main({...})
+main({...})

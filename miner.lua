@@ -179,7 +179,7 @@ end
 local function mineChunk(_bDebug)
 	for x = 0, 15 do
 		for z = 0, 15 do
-			if (z % 2 == 0 and x == 0) or (z % 2 == 1 and x == 15) then
+			if (x == 0 or z == 0) or (x == 15 or z == 15) then
 				if turtle.detectUp() and not turtle.digUp() then
 					if _bDebug then
 						print('Turtle cannot dig up')

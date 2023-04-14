@@ -10,59 +10,31 @@ if not parallel then
 end
 
 ---BEGIN default configs---
-configPath = 'reactor.cfg'
+local configPath = 'reactor.cfg'
 
-defaultEnabled = false
-normalBurnRate = 1.0
-overloadBurnRate = 0 -- 0 means the max burn rate
-alarmThreshold = 0.55
-safeCooldownTime = 1.5
-forceShutThreshold = 0.2
-restartThreshold = 0.5
-maxHeatedCoolant = 1.01
-maxNuclearWaste = 0.9
-maxTemperature = 850 -- 850 °C
+local cfg = {
+	defaultEnabled = false,
+	normalBurnRate = 1.0,
+	overloadBurnRate = 0, -- 0 means the max burn rate
+	smoothBurn = 1,
+	fuelIncreaseRate = 0.5,
+	alarmThreshold = 0.55,
+	safeCooldownTime = 1.5,
+	forceShutThreshold = 0.2,
+	restartThreshold = 0.5,
+	maxHeatedCoolant = 1.01,
+	maxNuclearWaste = 0.9,
+	maxTemperature = 850, -- 850 °C
+}
 ---END default configs---
 
 local ok, config_loader = pcall(require, 'config')
 if ok then
 	if fs.exists(configPath) then
-		local cfg = config_loader.load(configPath, {
-			defaultEnabled = defaultEnabled,
-			normalBurnRate = normalBurnRate,
-			overloadBurnRate = overloadBurnRate,
-			alarmThreshold = alarmThreshold,
-			safeCooldownTime = safeCooldownTime,
-			forceShutThreshold = forceShutThreshold,
-			restartThreshold = restartThreshold,
-			maxHeatedCoolant = maxHeatedCoolant,
-			maxNuclearWaste = maxNuclearWaste,
-			maxTemperature = maxTemperature,
-		})
-		defaultEnabled = cfg.defaultEnabled
-		normalBurnRate = cfg.normalBurnRate
-		overloadBurnRate = cfg.overloadBurnRate
-		alarmThreshold = cfg.alarmThreshold
-		safeCooldownTime = cfg.safeCooldownTime
-		forceShutThreshold = cfg.forceShutThreshold
-		restartThreshold = cfg.restartThreshold
-		maxHeatedCoolant = cfg.maxHeatedCoolant
-		maxNuclearWaste = cfg.maxNuclearWaste
-		maxTemperature = cfg.maxTemperature
+		cfg = config_loader.load(configPath, cfg)
 	else
 		printError(('Config file not exists, saving default config at "%s"'):format(configPath))
-		config_loader.save(configPath, {
-			defaultEnabled = defaultEnabled,
-			normalBurnRate = normalBurnRate,
-			overloadBurnRate = overloadBurnRate,
-			alarmThreshold = alarmThreshold,
-			safeCooldownTime = safeCooldownTime,
-			forceShutThreshold = forceShutThreshold,
-			restartThreshold = restartThreshold,
-			maxHeatedCoolant = maxHeatedCoolant,
-			maxNuclearWaste = maxNuclearWaste,
-			maxTemperature = maxTemperature,
-		})
+		config_loader.save(configPath, cfg)
 	end
 else
 	printError('module "config.lua" not found')
@@ -70,7 +42,7 @@ end
 
 ---BEGIN status---
 
-enabled = defaultEnabled
+enabled = cfg.defaultEnabled
 statusBtn = ''
 overloading = false
 
@@ -140,8 +112,15 @@ local function monitorListenClick(monitor)
 	if y == 2 then
 		if mWidth - #statusBtn <= x and x < mWidth then
 			enabled = not enabled
+		elseif x == math.floor(mWidth / 2) - 1 then
+			if cfg.normalBurnRate > 1 then
+				cfg.normalBurnRate = cfg.normalBurnRate - 1
+			end
+		elseif x == math.floor(mWidth / 2) + 1 then
+			cfg.normalBurnRate = cfg.normalBurnRate + 1
 		end
 	elseif y == 3 then
+		-- TODO: click each data to switch between short and full information
 	end
 end
 
@@ -151,7 +130,7 @@ local function onUpdateData(td, reactor, overloadIn_side)
 	local lastFuelAmount = fuelAmount
 	fuelAmount = reactor.getFuel().amount
 	fuelFilled = reactor.getFuelFilledPercentage()
-	fuelRate = reactor.getActualBurnRate() * 20 -- tick to second
+	fuelRate = reactor.getActualBurnRate() -- per tick
 	local lastCoolant = coolant
 	coolant = reactor.getCoolantFilledPercentage()
 	coolantRate = (coolant - lastCoolant) / td
@@ -167,12 +146,12 @@ end
 local function onTick(reactor, alarm_side)
 	local shouldRun = enabled and
 		damage == 0 and
-		coolant > forceShutThreshold and
-		(reactorRunning or coolant >= restartThreshold) and
-		coolant + coolantRate * safeCooldownTime > 0.05 and
-		heatedCoolant < maxHeatedCoolant and
-		nuclearWasteFilled < maxNuclearWaste and
-		temperature - 273 < maxTemperature
+		coolant > cfg.forceShutThreshold and
+		(reactorRunning or coolant >= cfg.restartThreshold) and
+		coolant + coolantRate * cfg.safeCooldownTime > 0.05 and
+		heatedCoolant < cfg.maxHeatedCoolant and
+		nuclearWasteFilled < cfg.maxNuclearWaste and
+		temperature - 273 < cfg.maxTemperature
 	local alarm = false
 	if reactorRunning ~= shouldRun then
 		if shouldRun then
@@ -190,17 +169,33 @@ local function onTick(reactor, alarm_side)
 		end
 	end
 	local burnRate = 0
-	if overloading then
-		if overloadBurnRate > 0 then
-			burnRate = overloadBurnRate
+	if shouldRun then
+		if overloading then
+			if cfg.overloadBurnRate > 0 then
+				burnRate = cfg.overloadBurnRate
+			else
+				burnRate = reactor.getMaxBurnRate()
+			end
 		else
-			burnRate = reactor.getMaxBurnRate()
+			burnRate = cfg.normalBurnRate
 		end
-	else
-		burnRate = normalBurnRate
 	end
-	reactor.setBurnRate(burnRate)
-	if coolant <= alarmThreshold then
+	if cfg.smoothBurn == 1 or (cfg.smoothBurn == 2 and overloading) then
+		local nextRate = fuelRate
+		if coolantRate >= 0 then
+			if cfg.smoothBurn == 2 and nextRate < cfg.normalBurnRate then
+				nextRate = cfg.normalBurnRate
+			elseif nextRate + cfg.fuelIncreaseRate > burnRate then
+				nextRate = burnRate
+			else
+				nextRate = nextRate + cfg.fuelIncreaseRate
+			end
+		end
+		reactor.setBurnRate(nextRate)
+	else
+		reactor.setBurnRate(burnRate)
+	end
+	if coolant <= cfg.alarmThreshold then
 		alarm = true
 	end
 	if alarm_side then
@@ -251,6 +246,9 @@ local function updateMonitor(monitor)
 	monitor.setTextColor(statusColor)
 	monitor.setCursorPos(3, 2)
 	monitor.write(statusStr)
+	monitor.setTextColor(colors.white)
+	monitor.setCursorPos(math.floor(mWidth / 2) - 1, 2)
+	monitor.write('-/+')
 	if enabled then
 		statusBtn, statusColor = '[SCRAM] ', colors.red
 	else
@@ -265,7 +263,7 @@ local function updateMonitor(monitor)
 	monitor.setTextColor(colors.white)
 	monitor.write(' | ')
 	local tempC = temperature - 273 -- use °C insteat of K
-	if tempC >= maxTemperature then
+	if tempC >= cfg.maxTemperature then
 		monitor.setTextColor(colors.red)
 	elseif tempC >= 500 then
 		monitor.setTextColor(colors.orange)
@@ -282,15 +280,15 @@ local function updateMonitor(monitor)
 	termUpdateAt(monitor, 1, 4, '   Fuel')
 	monitor.setTextColor(colors.white)
 	monitor.write(' | ')
-	monitor.write(string.format('%dmB [%.1fmB/s]', fuelAmount, fuelRate))
+	monitor.write(string.format('%dmB [%.2fmB/t]', fuelAmount, fuelRate))
 	--- update coolant
 	monitor.setTextColor(colors.cyan)
 	termUpdateAt(monitor, 1, 5, 'Coolant')
 	monitor.setTextColor(colors.white)
 	monitor.write(' | ')
-	if coolant <= forceShutThreshold then
+	if coolant <= cfg.forceShutThreshold then
 		monitor.setTextColor(colors.red)
-	elseif coolant <= restartThreshold then
+	elseif coolant <= cfg.restartThreshold then
 		monitor.setTextColor(colors.yellow)
 	else
 		monitor.setTextColor(colors.blue)

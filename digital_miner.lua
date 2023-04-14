@@ -6,6 +6,7 @@ if not turtle then
 end
 
 local debuging = false
+local enable_teleporter = false
 
 local miner_frequency = os.getComputerLabel()
 local emergency_frequency = miner_frequency..'Err'
@@ -133,18 +134,20 @@ local function place()
 	end
 	doUntil(turtle.place)
 	doUntil(turtle.turnLeft)
-	if not selectItem(teleporter_id) then
-		return false, string.format('No item [%s] found', teleporter_id)
+	if enable_teleporter then
+		if not selectItem(teleporter_id) then
+			return false, string.format('No item [%s] found', teleporter_id)
+		end
+		doUntil(turtle.placeUp)
+		local teleporter
+		repeat
+			teleporter = peripheral.wrap('top')
+		until teleporter
+		if not hasFrequency(teleporter, miner_frequency) then
+			teleporter.createFrequency(miner_frequency)
+		end
+		teleporter.setFrequency(miner_frequency)
 	end
-	doUntil(turtle.placeUp)
-	local teleporter
-	repeat
-		teleporter = peripheral.wrap('top')
-	until teleporter
-	if not hasFrequency(teleporter, miner_frequency) then
-		teleporter.createFrequency(miner_frequency)
-	end
-	teleporter.setFrequency(miner_frequency)
 	doUntil(turtle.back)
 	if not selectItem(cable_id) then
 		return false, string.format('No item [%s] found', cable_id)
@@ -196,14 +199,14 @@ local function destroy()
 	return true
 end
 
-local function broadcastProcess(modem, remain)
+local function broadcastProcess(modem, typ, data)
 	rednet.open(peripheral.getName(modem))
 	local monitors = {rednet.lookup('miner_monitor')}
 	for _, m in ipairs(monitors) do
 		rednet.send(m, {
 			id = miner_frequency,
-			typ = 'process',
-			remain = remain,
+			typ = typ,
+			data = data,
 		}, 'digital_miner')
 	end
 	rednet.close(peripheral.getName(modem))
@@ -251,6 +254,7 @@ local function placeMinerAndDestroy(modem)
 end
 
 local cached_position_path = 'position.txt'
+local cached_stat_path = 'stat.txt'
 
 local function broadcastPos(modem, x, y, z)
 	rednet.open(peripheral.getName(modem))
@@ -260,30 +264,73 @@ local function broadcastPos(modem, x, y, z)
 			id = miner_frequency,
 			typ = 'pos',
 			x = x, y = y, z = z,
+			fuel = turtle.getFuelLevel(),
 		}, 'digital_miner')
 	end
 	rednet.close(peripheral.getName(modem))
 end
 
+local function gpsLocate()
+	return gps.locate(2, debuging)
+end
+
+local function _moveAndBroadcast1(modem, n)
+	for i = 1, n do
+		ok, _, err = doUntil(turtle.forward, 3)
+		if not ok then
+			print()
+			broadcastProcess(modem, 'error', err or 'Turtle cannot move forward')
+			return false, err
+		end
+		rewrite(string.format('Moved %d blocks...', i))
+		x, y, z = doUntil(gpsLocate)
+		broadcastPos(modem, x, y, z)
+	end
+end
+
+local function _moveAndBroadcast2(modem, n)
+	local done = false
+	parallel.waitForAll(function()
+		for i = 1, n do
+			ok, _, err = doUntil(turtle.forward, 3)
+			if not ok then
+				print()
+				broadcastProcess(modem, 'error', err or 'Turtle cannot move forward')
+				return false, err
+			end
+			rewrite(string.format('Moved %d blocks...', i))
+		end
+		done = true
+	end, function()
+		repeat
+			x, y, z = doUntil(gpsLocate)
+			broadcastPos(modem, x, y, z)
+		until done
+	end)
+end
+
 local function placeAndForward(radious, islaunch)
 	radious = radious or 32
+	index = 0
 	if islaunch then
 		print('Turtle restarted :)')
 		local x0, y0, z0
 		local oldpos = false
-		local fd = io.open(cached_position_path, 'r')
-		if fd then
-			x0 = tonumber(fd:read())
-			y0 = tonumber(fd:read())
-			z0 = tonumber(fd:read())
-			if z0 and y0 and z0 then
-				print('Cached pos:', x0, y0, z0)
-				oldpos = true
+		do
+			local fd = io.open(cached_position_path, 'r')
+			if fd then
+				x0 = tonumber(fd:read())
+				y0 = tonumber(fd:read())
+				z0 = tonumber(fd:read())
+				if z0 and y0 and z0 then
+					print('Cached pos:', x0, y0, z0)
+					oldpos = true
+				end
 			end
 		end
 		rewrite('Locating...')
 		equipLeftModem()
-		local x, y, z = gps.locate(2, debuging)
+		local x, y, z = doUntil(gpsLocate)
 		if not(x and y and z) then
 			print()
 			return false, 'Cannot locate current position'
@@ -302,6 +349,14 @@ local function placeAndForward(radious, islaunch)
 				return false, err
 			end
 			fs.delete(cached_position_path)
+			doUntil(turtle.back)
+			doUntil(turtle.back)
+		end
+		do
+			local fd = io.open(cached_stat_path, 'r')
+			if fd then
+				index = tonumber(fd:read())
+			end
 		end
 	end
 
@@ -309,7 +364,7 @@ local function placeAndForward(radious, islaunch)
 	while true do
 		rewrite('Locating...')
 		equipLeftModem()
-		x, y, z = gps.locate(2, debuging)
+		x, y, z = doUntil(gpsLocate)
 		if not(x and y and z) then
 			print()
 			return false, 'Cannot locate current position'
@@ -322,23 +377,48 @@ local function placeAndForward(radious, islaunch)
 		fd:write(string.format('%d\n%d\n%d', x, y, z))
 		fd:close()
 		sleep(1)
+		local fuel = turtle.getFuelLevel()
+		if fuel ~= 'unlimited' and fuel < 10000 then
+			shell.run('refuel', 10000)
+		end
+
+		-- MINE
 		local ok, err = placeMinerAndDestroy(modem)
 		if not ok then
 			return false, err
 		end
+
+		-- MOVE
 		equipLeftModem()
 		broadcastProcess(modem, 'moving')
 		fs.delete(cached_position_path)
 		rewrite('Moving...')
-		for i = 1, 2 * radious do
-			ok, _, err = doUntil(turtle.forward, 3)
-			if not ok then
-				print()
-				broadcastProcess(modem, 'error', err or 'Turtle cannot move forward')
-				return false, err
+		--[[
+		 36 35 34 33 32 31 30
+		 37 16 15 14 13 12 29
+		 38 17  4  3  2 11 28
+		 39 18  5  0  1 10 27
+		 40 19  6  7  8  9 26
+		 41 20 21 22 23 24 25
+		 42 43 44 45 46 47 48 49
+		 n = math.floor(math.sqrt(m))
+		 n * n == m or n * (n + 1) == m
+		]]
+		if parallel then
+			_moveAndBroadcast2(modem, 2 * radious - 2)
+		else
+			_moveAndBroadcast1(modem, 2 * radious - 2)
+		end
+		index = index + 1
+		do
+			local fd = io.open(cached_stat_path, 'w')
+			fd:write(string.format('%d\n', index))
+			fd:close()
+			local n = math.floor(math.sqrt(index))
+			if n * n == index or n * n == index - n then
+				rewrite('Turn left...')
+				doUntil(turtle.turnLeft)
 			end
-			rewrite(string.format('Moved %d blocks...', i))
-			broadcastPos(modem, x, y, z)
 		end
 	end
 end
@@ -359,20 +439,20 @@ local subCommands = {
 		local ok, err = placeAndForward(radious, islaunch)
 		if not ok then
 			printError(err or 'Failed by unknown reason')
-			print('Placing emergency teleporter...')
-			if not selectItem(teleporter_id) then
-				return false, string.format('No item [%s] found', teleporter_id)
-			end
-			doUntil(turtle.placeDown)
-			local teleporter
-			repeat
-				teleporter = peripheral.wrap('bottom')
-				sleep(1)
-			until teleporter
-			if not hasFrequency(teleporter, emergency_frequency) then
-				teleporter.createFrequency(emergency_frequency)
-			end
-			teleporter.setFrequency(emergency_frequency)
+			-- print('Placing emergency teleporter...')
+			-- if not selectItem(teleporter_id) then
+			-- 	return false, string.format('No item [%s] found', teleporter_id)
+			-- end
+			-- doUntil(turtle.placeDown)
+			-- local teleporter
+			-- repeat
+			-- 	teleporter = peripheral.wrap('bottom')
+			-- 	sleep(1)
+			-- until teleporter
+			-- if not hasFrequency(teleporter, emergency_frequency) then
+			-- 	teleporter.createFrequency(emergency_frequency)
+			-- end
+			-- teleporter.setFrequency(emergency_frequency)
 		end
 		return ok
 	end

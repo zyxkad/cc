@@ -21,7 +21,8 @@ end
 
 local global_aes_key, err = aes.loadKey()
 if not global_aes_key then
-	error('Cannot load global aes key: ' .. err)
+	global_aes_key = string.rep(' ', 16)
+	-- error('Cannot load global aes key: ' .. err)
 end
 
 local hmac = hmac
@@ -71,6 +72,9 @@ local rpcDCalls = {
 	digUp   = function() return turtle.digUp() end,
 	digDown = function() return turtle.digDown() end,
 
+	suck = function() return turtle.suck() or turtle.suckUp() or turtle.suckDown() end,
+	drop = function() return turtle.drop() or turtle.dropUp() or turtle.dropDown() end,
+
 	refuel = function() return turtle.refuel() end,
 	getFuel = function()
 		local level, limit = turtle.getFuelLevel(), turtle.getFuelLimit()
@@ -81,7 +85,7 @@ local rpcDCalls = {
 	end,
 
 	locate = function()
-		local x, y, z = sgps.locate()
+		local x, y, z = gps.locate()
 		if not x then
 			return nil
 		end
@@ -103,7 +107,7 @@ local function handle_msg(prot, sdr, msg)
 	print('Running', cmd)
 	local c = rpcDCalls[cmd]
 	if c then
-		rednetReply(prot, sdr, c(arg))
+		rednetReply(prot, sdr, {c(arg)})
 	else
 		print(string.format("Unknown command '%s'", cmd))
 		rednetReply(prot, sdr, "Unknown command")

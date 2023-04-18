@@ -10,6 +10,8 @@ assert(chatbox, 'Cannot find chat box')
 cell = peripheral.wrap('bottom')
 assert(cell, 'Cannot find induction cell')
 
+msgPrompt = 'CK Induction Cell'
+
 k = 1000
 M = k * 1000
 G = M * 1000
@@ -77,26 +79,27 @@ local function updateData()
 end
 
 local function sendMessage(msg, target)
-	if type(msg) ~= 'str' then
-		assert(type(msg) == 'table', 'Message must be a string or a table')
-		if msg[1] then -- if it's an array
+	if type(msg) == 'table' then
+		if msg['text'] == nil then -- if it's an array
 			msg = {
 				text = '',
 				extra = msg,
 			}
 		end
 		msg = textutils.serialiseJSON(msg)
+	elseif type(msg) ~= 'str' then
+		error('Message must be a string or a table')
 	end
 	if target then
 		local i = 0
 		for i = 0, 101 do
-			if chatbox.sendFormattedMessageToPlayer(msg, target, 'CK Induction Cell') then
+			if chatbox.sendFormattedMessageToPlayer(msg, target, msgPrompt) then
 				break
 			end
 			sleep(0.05)
 		end
 	else
-		repeat sleep(0.05) until chatbox.sendFormattedMessage(msg, 'CK Induction Cell')
+		repeat sleep(0.05) until chatbox.sendFormattedMessage(msg, msgPrompt)
 	end
 end
 
@@ -208,9 +211,15 @@ local function main(args)
 		local lastWarn = -0x7fffffff
 		local lastLoosing = false
 		while true do
-			if energy < 10 * T then
+			if energy < G then
 				redstone.setOutput('back', true)
 				if lossing and os.clock() - lastWarn > 10 then
+					sendEnergyWarn()
+					lastWarn = os.clock()
+				end
+			elseif energy < 10 * T then
+				redstone.setOutput('back', true)
+				if lossing and os.clock() - lastWarn > 20 then
 					sendEnergyWarn()
 					lastWarn = os.clock()
 				end

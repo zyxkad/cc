@@ -1,7 +1,9 @@
+-- Inventory Manager
+-- by zyxkad@gmail.com
 
 local iv = peripheral.find("inventoryManager")
 if not iv then
-	error('No player detector was found')
+	error('No inventory manager was found')
 end
 
 local chatbox = peripheral.find('chatBox')
@@ -13,8 +15,33 @@ local function startswith(s, prefix)
 	return string.find(s, prefix, 1, true) == 1
 end
 
+local function sendMessage(msg, target)
+	if type(msg) == 'table' then
+		if msg['text'] == nil then -- if it's an array
+			msg = {
+				text = '',
+				extra = msg,
+			}
+		end
+		msg = textutils.serialiseJSON(msg)
+	elseif type(msg) ~= 'str' then
+		error('Message must be a string or a table')
+	end
+	if target then
+		local i = 0
+		for i = 0, 101 do
+			if chatbox.sendFormattedMessageToPlayer(msg, target, msgPrompt) then
+				break
+			end
+			sleep(0.05)
+		end
+	else
+		repeat sleep(0.05) until chatbox.sendFormattedMessage(msg, msgPrompt)
+	end
+end
+
 local function sendErrorMsg(msg, player)
-	return chatbox.sendFormattedMessageToPlayer(textutils.serialiseJSON({
+	return sendMessage({
 		text = 'ERROR: ',
 		color = 'red',
 		extra = {
@@ -23,7 +50,7 @@ local function sendErrorMsg(msg, player)
 				underlined = true,
 			}
 		}
-	}), player)
+	}, player)
 end
 
 local function playerCall(player, func, ...)
@@ -52,8 +79,8 @@ function main(args)
 				local ls = iv.list()
 				local total = 0
 				for _, d in ipairs(ls) do
-					local ok, amount = playerCall(owner, iv.removeItemFromPlayer, invSide, d.count, d.slot)
-					if ok then
+					local ok, amount = playerCall(owner, iv.removeItemFromPlayerNBT, invSide, d.count, d.slot)
+					if ok and amount then
 						total = total + amount
 					end
 				end
@@ -75,8 +102,8 @@ function main(args)
 				local total = 0
 				for _, d in ipairs(ls) do
 					if d.slot == slot then
-						local ok, amount = playerCall(owner, iv.removeItemFromPlayer, invSide, d.count, slot)
-						if ok then
+						local ok, amount = playerCall(owner, iv.removeItemFromPlayerNBT, invSide, d.count, slot)
+						if ok and amount then
 							total = amount
 						end
 						break
@@ -101,7 +128,7 @@ function main(args)
 						sendErrorMsg('Send item error, no space available', owner)
 						break
 					end
-					local ok, amount = playerCall(owner, iv.addItemToPlayer, invSide, 64)
+					local ok, amount = playerCall(owner, iv.addItemToPlayerNBT, invSide, 64)
 					if not ok or amount == 0 then
 						break
 					end

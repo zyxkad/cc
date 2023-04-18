@@ -8,8 +8,13 @@ end
 local debuging = false
 local enable_teleporter = false
 
-local miner_frequency = os.getComputerLabel()
-local emergency_frequency = miner_frequency..'Err'
+local turtleLabel = os.getComputerLabel()
+if not turtleLabel then
+	error('Please use `label set <label>` give the miner a name')
+end
+
+local miner_frequency = turtleLabel
+local emergency_frequency = turtleLabel..'Err'
 local digital_miner_id = 'mekanism:digital_miner'
 local cable_id = 'mekanism:advanced_universal_cable'
 local transporter_id = 'mekanism:advanced_logistcial_transporter'
@@ -309,9 +314,20 @@ local function _moveAndBroadcast2(modem, n)
 	end)
 end
 
+local function isProtected(protects, x, z, radious)
+	-- protects = { x=0, z=0, range=128 }
+	for _, p in ipairs(protects) do
+		if math.abs(p.x - x) + math.abs(p.z - z) <= (p.range or 0) + radious then
+			return true
+		end
+	end
+	return false
+end
+
 local function placeAndForward(radious, islaunch)
+	local protect_positions = require('protects')
 	radious = radious or 32
-	index = 0
+	local index = 0
 	if islaunch then
 		print('Turtle restarted :)')
 		local x0, y0, z0
@@ -382,10 +398,12 @@ local function placeAndForward(radious, islaunch)
 			shell.run('refuel', 10000)
 		end
 
-		-- MINE
-		local ok, err = placeMinerAndDestroy(modem)
-		if not ok then
-			return false, err
+		if not isProtected(protect_positions, x, z, radious) then
+			-- MINE
+			local ok, err = placeMinerAndDestroy(modem)
+			if not ok then
+				return false, err
+			end
 		end
 
 		-- MOVE
@@ -439,20 +457,22 @@ local subCommands = {
 		local ok, err = placeAndForward(radious, islaunch)
 		if not ok then
 			printError(err or 'Failed by unknown reason')
-			-- print('Placing emergency teleporter...')
-			-- if not selectItem(teleporter_id) then
-			-- 	return false, string.format('No item [%s] found', teleporter_id)
-			-- end
-			-- doUntil(turtle.placeDown)
-			-- local teleporter
-			-- repeat
-			-- 	teleporter = peripheral.wrap('bottom')
-			-- 	sleep(1)
-			-- until teleporter
-			-- if not hasFrequency(teleporter, emergency_frequency) then
-			-- 	teleporter.createFrequency(emergency_frequency)
-			-- end
-			-- teleporter.setFrequency(emergency_frequency)
+			if enable_teleporter then
+				print('Placing emergency teleporter...')
+				if not selectItem(teleporter_id) then
+					return false, string.format('No item [%s] found', teleporter_id)
+				end
+				doUntil(turtle.placeDown)
+				local teleporter
+				repeat
+					teleporter = peripheral.wrap('bottom')
+					sleep(1)
+				until teleporter
+				if not hasFrequency(teleporter, emergency_frequency) then
+					teleporter.createFrequency(emergency_frequency)
+				end
+				teleporter.setFrequency(emergency_frequency)
+			end
 		end
 		return ok
 	end

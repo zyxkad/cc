@@ -107,7 +107,7 @@ local function listenData()
 			else
 				local d = datas[msg.id]
 				if d then
-					d.msg = string.format('%s: %s', msg.typ, msg.data)
+					d.msg = msg.data and string.format('%s: %s', msg.typ, msg.data) or msg.typ
 				end
 			end
 		end
@@ -142,7 +142,9 @@ local function loadData()
 			local con = fd:read('a')
 			if con then
 				local d = textutils.unserialiseJSON(con)
+				d.msg = 'o='..d.msg
 				datas[d.id] = d
+				print('loaded:', d.id)
 			end
 		end
 	end

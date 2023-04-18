@@ -1,7 +1,10 @@
 
 triggerSide = 'front'
+enable_whitelist = false
+maxSpawnRetry = 15
+waitBeforeRetry = 6
 
-whitelist = require('whitelist')
+whitelist = enable_whitelist and require('whitelist') or nil
 
 drone = peripheral.find('drone_interface')
 if not drone then
@@ -74,14 +77,14 @@ local function waitActionDone(action, timeout)
 end
 
 local function spawnDrone()
-	for i = 1, 15 do
+	for i = 1, maxSpawnRetry do
 		if drone.isConnectedToDrone() then
 			return true
 		end
 		redstone.setOutput(triggerSide, true)
 		sleep(0.1)
 		redstone.setOutput(triggerSide, false)
-		sleep(0.1)
+		sleep(waitBeforeRetry)
 	end
 	return false
 end
@@ -105,20 +108,21 @@ local function _tp(sender, x1, y1, z1, x2, y2, z2)
 	drone.clearArea()
 	drone.addArea(x2, y2, z2)
 	waitActionDone('teleport')
+	sleep(100)
 	waitActionDone('entity_export', 2)
 	pcall(drone.exitPiece)
 	return true
 end
 
 local function tp2(sender, arg)
-	if not inList(whitelist, sender) then
+	if enable_whitelist and not inList(whitelist, sender) then
 		return false, 'You are not in the whitelist, contact <ckupen> or <zyxkad#4421> in discord to get whitelist'
 	end
 	local target = arg
 	if target == sender then
 		return false, "Cannot teleport to your self"
 	end
-	if not inList(whitelist, target) then
+	if enable_whitelist and not inList(whitelist, target) then
 		return false, 'The target player are not in the whitelist'
 	end
 	local tg = detector.getPlayerPos(target)
@@ -138,7 +142,7 @@ local function tp2(sender, arg)
 end
 
 local function tp3(sender, arg)
-	if not inList(whitelist, sender) then
+	if enable_whitelist and not inList(whitelist, sender) then
 		return false, "You are not in the whitelist, contact <ckupen> or <zyxkad#4421> in discord to get whitelist"
 	end
 	local x, y, z
@@ -175,7 +179,7 @@ local function tp3(sender, arg)
 end
 
 local function warp(sender, arg)
-	if not inList(whitelist, sender) then
+	if enable_whitelist and not inList(whitelist, sender) then
 		return false, "You are not in the whitelist, contact <ckupen> or <zyxkad#4421> in discord to get whitelist"
 	end
 	local target = arg
@@ -244,7 +248,37 @@ while true do
 		drone.exitPiece()
 	end
 	local _, sender, msg = os.pullEvent('chat')
-	if msg == '.tp2' then
+	if msg == '.tp' then
+		chatBox.sendFormattedMessage(textutils.serialiseJSON({
+		text = '',
+		extra = {
+			{
+				text = 'Recevied a waypoint from ',
+			},
+			{
+				text = sender,
+				color = 'yellow',
+				clickEvent = {
+					action = 'suggest_command',
+					value = sender,
+				},
+			},
+			{
+				text = string.format(' (%s)[%d %d %d]', name, x, y, z),
+				color = 'aqua',
+				underlined = true,
+				clickEvent = {
+					action = 'suggest_command',
+					value = string.format('.tp3 ', x, y, z),
+				},
+				hoverEvent = {
+					action = 'show_text',
+					value = '.tp3',
+				},
+			}
+		}
+		}), 'DT')
+	elseif msg == '.tp2' then
 		sendError('Usage: .tp2 <player>', sender)
 	elseif hadPrefix(msg, '.tp2 ') then
 		local ok, err = tp2(sender, msg:sub(6))

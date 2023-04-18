@@ -29,7 +29,7 @@ local function showMonitor(mName)
 			local d = pdor.getPlayerPos(p)
 			monitor.setCursorPos(1, i)
 			monitor.clearLine()
-			if d then
+			if d and d.x then
 				monitor.write(string.format('%16s | %5d %3d %5d', p, d.x, d.y, d.z))
 			end
 		end

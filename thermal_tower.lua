@@ -68,26 +68,27 @@ function build()
 		doUntil(turtle.up)
 		for d = 1, 4 do
 			for i = 1, 3 do
-				local item = structural_glass
-				if i == 1 then
-					item = thermal_block
-				elseif y == 2 and i == 2 then
-					if d == 1 then
-						-- keep the correct facing direction
-						doUntil(turtle.turnRight)
-						selectAndPlace(thermal_controller)
-						doUntil(turtle.turnLeft)
-						doUntil(turtle.forward)
-						goto continue
-					elseif d == 3 then
+				repeat
+					local item = structural_glass
+					if i == 1 then
+						item = thermal_block
+					elseif y == 2 and i == 2 then
+						if d == 1 then
+							-- keep the correct facing direction
+							doUntil(turtle.turnRight)
+							selectAndPlace(thermal_controller)
+							doUntil(turtle.turnLeft)
+							doUntil(turtle.forward)
+							break
+						elseif d == 3 then
+							item = thermal_valve
+						end
+					elseif (y == 4 or y == 6) and d == 3 and i == 2 then
 						item = thermal_valve
 					end
-				elseif (y == 4 or y == 6) and d == 3 and i == 2 then
-					item = thermal_valve
-				end
-				selectAndPlace(item)
-				doUntil(turtle.forward)
-				::continue::
+					selectAndPlace(item)
+					doUntil(turtle.forward)
+				until true
 			end
 			print('end a line')
 			doUntil(turtle.turnRight)

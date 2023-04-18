@@ -203,6 +203,8 @@ local function onTick(reactor, alarm_side)
 	end
 end
 
+_circleStr = {'-', '\\', '|', '/'}
+
 local function updateMonitor(monitor)
 	local now = os.clock()
 	local mWidth, mHeight = monitor.getSize()
@@ -216,29 +218,13 @@ local function updateMonitor(monitor)
 	if reactorRunning then
 		statusStr, statusColor = 'REACTING', colors.orange
 		local i = math.floor(now * 4)
-		if i % 4 == 0 then
-			stars = string.rep('-', #statusStr + 2)
-		elseif i % 4 == 1 then
-			stars = string.rep('\\', #statusStr + 2)
-		elseif i % 4 == 2 then
-			stars = string.rep('|', #statusStr + 2)
-		else
-			stars = string.rep('/', #statusStr + 2)
-		end
+		stars = string.rep(_circleStr[i % 4 + 1], #statusStr + 2)
 	elseif enabled then
 		statusStr, statusColor = 'COOLING', colors.blue
-		if math.floor(now * 1.5) % 2 == 0 then
-			stars = string.rep('*', #statusStr + 2)
-		else
-			stars = string.rep('+', #statusStr + 2)
-		end
+		stars = string.rep(math.floor(now * 1.5) % 2 and '+' or '*', #statusStr + 2)
 	else
 		statusStr, statusColor = 'DISABLED', colors.red
-		if math.floor(now) % 2 == 0 then
-			stars = string.rep('#', #statusStr + 2)
-		else
-			stars = string.rep('@', #statusStr + 2)
-		end
+		stars = string.rep(math.floor(now) % 2 and '@' or '#', #statusStr + 2)
 	end
 	monitor.setBackgroundColor(colors.black)
 	monitor.setTextColor(colors.yellow)

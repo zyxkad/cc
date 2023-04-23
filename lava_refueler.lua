@@ -15,6 +15,8 @@ local function selectItem(item)
 end
 
 function main()
+	local suck = turtle.suckUp
+	local drop = turtle.dropUp
 	if turtle.getFuelLevel() == 'unlimited' then
 		print('Unlimited fuel')
 		return
@@ -31,7 +33,7 @@ function main()
 				printError('ERR: Cannot found an empty slot')
 				return
 			end
-			if not turtle.suck() then
+			if not suck() then
 				printError('ERR: Nothing was in the tank')
 				return
 			end
@@ -48,8 +50,8 @@ function main()
 	print('Fueling...')
 	local ok = true
 	while turtle.getFuelLevel() < fuelLimit do
-		turtle.drop()
-		if not turtle.suck() then
+		drop()
+		if not suck() then
 			ok = false
 			printError('No fuel left in the tank')
 			break
@@ -59,7 +61,7 @@ function main()
 	end
 	if ok then
 		-- don't keep the bucket
-		turtle.drop()
+		drop()
 	end
 	print('Fuel end:', turtle.getFuelLevel(), 'out of', fuelLimit)
 end

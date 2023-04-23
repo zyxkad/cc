@@ -49,13 +49,13 @@ local function sendMessage(msg, target)
 		local i = 0
 		for i = 0, 101 do
 			if chatbox.sendFormattedMessageToPlayer(msg, target, msgPrompt) then
-				break
+				return true
 			end
 			sleep(0.05)
 		end
-	else
-		repeat sleep(0.05) until chatbox.sendFormattedMessage(msg, msgPrompt)
+		return false
 	end
+	repeat sleep(0.05) until chatbox.sendFormattedMessage(msg, msgPrompt)
 	return true
 end
 
@@ -121,46 +121,67 @@ end
 
 function main(args)
 	local owner = nil
-	while true do
-		do
-			local newowner = iv.getOwner()
-			while not newowner do -- wait until player online
-				sleep(1)
-				newowner = iv.getOwner()
+	function check()
+		while true do
+			do
+				local newowner = iv.getOwner()
+				while not newowner do -- wait until player online
+					sleep(1)
+					newowner = iv.getOwner()
+				end
+				if newowner ~= owner then
+					owner = newowner
+					print('Program runs for '..owner)
+					sendMessage({
+						text = 'Oxygen auto recharger online',
+						color = 'light_purple',
+					}, owner)
+				end
 			end
-			if newowner ~= owner then
-				owner = newowner
-				print('Program runs for '..owner)
-			end
-		end
-		local ok, tanks = playerCall(owner, getTanks)
-		if ok then
-			-- TODO: calc total oxygen amount
-			for _, tank in ipairs(tanks) do
-				repeat
-					if tank.oxygens <= refillWhenLessThan then
-						if not giveTank() and tank.oxygens > 0 then
-							break
+			local ok, tanks = playerCall(owner, getTanks)
+			if ok then
+				-- TODO: calc total oxygen amount
+				for _, tank in ipairs(tanks) do
+					repeat
+						if tank.oxygens <= refillWhenLessThan then
+							if not giveTank() and tank.oxygens > 0 then
+								break
+							end
+							if not iv.removeItemFromPlayerNBT(tankInputSide, 1, nil, { name=tank.name, fromSlot=tank.slot }) then
+								break
+							end
+							sendMessage({
+								{
+									text = 'Success refilled tank ',
+									color = 'green',
+								},
+								{
+									text = trim(tank.displayName),
+									color = 'aqua',
+									underlined = true,
+								}
+							}, owner)
 						end
-						if not iv.removeItemFromPlayerNBT(tankInputSide, 1, nil, { name=tank.name, fromSlot=tank.slot }) then
-							break
-						end
-						sendMessage({
-							{
-								text = 'Success refilled tank ',
-								color = 'green',
-							},
-							{
-								text = trim(tank.displayName),
-								color = 'aqua',
-							}
-						}, owner)
-					end
-				until true
+					until true
+				end
 			end
+			sleep(0.2)
 		end
-		sleep(0.2)
 	end
+	function listenCmd()
+		while true do
+			local _, player, msg = os.pullEvent('chat')
+			if player == owner then
+				if msg == 'o2' then
+					giveTank()
+				end
+			end
+		end
+	end
+	parallel.waitForAny(
+		check,
+		listenCmd
+	)
 end
 
 main({...})

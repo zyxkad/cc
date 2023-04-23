@@ -46,7 +46,7 @@ local function showPocket()
 		local datas = {}
 		for _, p in ipairs(players) do
 			local d = pdor.getPlayerPos(p)
-			if d then
+			if d and d.x then
 				d.name = p
 				datas[#datas + 1] = d
 			end

@@ -41,27 +41,36 @@ local function selectAndPlace(item)
 	doUntil(turtle.placeDown)
 end
 
-function build()
+local function build(reverse)
+	local turn1
+	local turn2
+	if reverse then
+		turn1 = function() return doUntil(turtle.turnRight) end
+		turn2 = function() return doUntil(turtle.turnLeft) end
+	else
+		turn1 = function() return doUntil(turtle.turnLeft) end
+		turn2 = function() return doUntil(turtle.turnRight) end
+	end
 	doUntil(turtle.up)
 	for _ = 1, 3 do
 		selectAndPlace(thermal_block)
 		doUntil(turtle.forward)
 	end
 	selectAndPlace(thermal_block)
-	doUntil(turtle.turnRight)
+	turn2()
 	for i = 3, 1, -1 do
 		for _ = 1, 2 do
 			for _ = 1, i do
 				doUntil(turtle.forward)
 				selectAndPlace(thermal_block)
 			end
-			doUntil(turtle.turnRight)
+			turn2()
 		end
 	end
 	for _ = 1, 2 do
 		doUntil(turtle.forward)
 	end
-	doUntil(turtle.turnRight)
+	turn2()
 	doUntil(turtle.back)
 	print('end the base')
 	for y = 2, max_height do
@@ -75,9 +84,9 @@ function build()
 					elseif y == 2 and i == 2 then
 						if d == 1 then
 							-- keep the correct facing direction
-							doUntil(turtle.turnRight)
+							turn2()
 							selectAndPlace(thermal_controller)
-							doUntil(turtle.turnLeft)
+							turn1()
 							doUntil(turtle.forward)
 							break
 						elseif d == 3 then
@@ -91,7 +100,7 @@ function build()
 				until true
 			end
 			print('end a line')
-			doUntil(turtle.turnRight)
+			turn2()
 		end
 		print('end a level')
 	end
@@ -101,6 +110,62 @@ function build()
 	for y = 1, max_height do
 		doUntil(turtle.down)
 	end
+	return true
 end
 
-build()
+
+---- CLI ----
+
+local subCommands = {
+	build1 = function(args, i) -- build left side
+		return build(false)
+	end,
+	build2 = function(args, i) -- build right side
+		return build(true)
+	end,
+	buildLine1 = function(args, i) -- build right side
+		for i = 1, 11 do -- build 11
+			build(false)
+			doUntil(turtle.forward)
+		end
+		return true
+	end,
+	buildLine2 = function(args, i) -- build right side
+		for i = 1, 11 do -- build 11
+			build(true)
+			doUntil(turtle.forward)
+		end
+		return true
+	end,
+}
+
+subCommands.help = function(args, i)
+	local sc = args[i + 1]
+	print('All subcommands:')
+	for c, _ in pairs(subCommands) do
+		print('-', c)
+	end
+end
+
+local function main(args)
+	if #args == 0 then
+		print('All subcommands:')
+		for c, _ in pairs(subCommands) do
+			print('-', c)
+		end
+		return
+	end
+	local subcmd = args[1]
+	local fn = subCommands[subcmd]
+	if fn then
+		fn(args, 1)
+	else
+		error(string.format("Unknown subcommand '%s'", subcmd))
+	end
+end
+
+if true then
+	return main({...})
+end
+
+---- END CLI ----

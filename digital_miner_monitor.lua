@@ -63,8 +63,8 @@ local function listenData()
 		local id, msg = rednet.receive('digital_miner')
 		local l = datas[msg.id]
 		if not l or l.i == id then
+			local d = datas[msg.id]
 			if msg.typ == 'pos' then
-				local d = datas[msg.id]
 				if d then
 					d.t = getTime()
 					d.x = msg.x
@@ -84,6 +84,22 @@ local function listenData()
 					}
 					datas[msg.id] = d
 				end
+			elseif msg.typ == 'mining' then
+				if d then
+					d.t = getTime()
+					d.msg = string.format('remain=%d', msg.data)
+				end
+			elseif msg.typ == 'error' then
+				if d then
+					printError('ERR:', msg.data)
+					d.msg = string.format('err=%s', msg.data)
+				end
+			else
+				if d then
+					d.msg = msg.data and string.format('%s: %s', msg.typ, msg.data) or msg.typ
+				end
+			end
+			if d then
 				local path = string.format('last_pos/%s.data', msg.id)
 				local fd, err = io.open(path, 'w')
 				if fd then
@@ -91,23 +107,6 @@ local function listenData()
 					fd:close()
 				else
 					printError('Cannot write to file :', path, ':', err)
-				end
-			elseif msg.typ == 'mining' then
-				local d = datas[msg.id]
-				if d then
-					d.t = getTime()
-					d.msg = string.format('remain=%d', msg.data)
-				end
-			elseif msg.typ == 'error' then
-				local d = datas[msg.id]
-				if d then
-					printError('ERR:', msg.data)
-					d.msg = string.format('err=%s', msg.data)
-				end
-			else
-				local d = datas[msg.id]
-				if d then
-					d.msg = msg.data and string.format('%s: %s', msg.typ, msg.data) or msg.typ
 				end
 			end
 		end
@@ -142,9 +141,11 @@ local function loadData()
 			local con = fd:read('a')
 			if con then
 				local d = textutils.unserialiseJSON(con)
-				d.msg = 'o='..d.msg
-				datas[d.id] = d
-				print('loaded:', d.id)
+				if d then
+					d.msg = d.msg and 'o='..d.msg or 'offline'
+					datas[d.id] = d
+					print('loaded:', d.id)
+				end
 			end
 		end
 	end

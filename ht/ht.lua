@@ -14,7 +14,10 @@ function main(args)
 		error(err, 3)
 	end
 
-	local htData = htcc.parse(fd)
+	local htBody = htcc.parse(fd)
+
+	local monitor = peripheral.find('monitor')
+	htBody:ondraw(monitor)
 
 	if true then return end
 

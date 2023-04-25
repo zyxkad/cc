@@ -1,5 +1,5 @@
 
-This is comment
+This is comment area
 
 @meta
 
@@ -13,30 +13,36 @@ script other_script -- same as above, but `onload` function won't be called
 
 /p center -- "p" is the basic tag
 	Hello; /p c=red; my;; world! -- single semicolon means EOL; double semicolon means ends of a tag
-
-/img abs=true right=6 bottom=5\
- src=https://tweaked.cc/pack.png width=5 height=5 @click=.imgClick
-	-- `@` means an action, `@click` means click action and it will call imgClick in example.lua
+	;;
 
 /p @click=other_script.some_function
 	Call 'some_function' in 'other_script.lua'
+	;;
 
 /a target=https://tweaked.cc/ -- "a" is the tag for open the link in user's browser (send a link to the user)
 	>> GO to tweaked.cc
+	;;
+
+/img abs=true right=6 bottom="5"\
+ src=https://tweaked.cc/pack.png width=5 height=5 @click=.imgClick
+	-- `@` means an action, `@click` means click action and it will call imgClick in example.lua
 
 /p id=textid
 	This is a identified text
 	;;
 
-This is a normal slash \/
-This is a normal slash too /
-This is a normal semicolon \;
-They is only one semicolon \;;
-This is only one semicolon too \; ;
-This is a normal backslash \\
-They are two backslashs \\\\
+This is a cross\
+line text
 
-The following is not a comment, but two dashes \--
-The following is three dashes \---
-The following is a dash and a comment \- --
-The following is a comment --\-
+/p; This is a normal slash \/ ;;
+/p; This is a normal slash too / ;;
+/p; This is a normal semicolon \; ;;
+-- They is only one semicolon \;;
+-- This is only one semicolon too \; ;
+-- This is a normal backslash \\
+-- They are two backslashs \\\\
+
+-- The following is not a comment, but two dashes \--
+-- The following is three dashes \---
+-- The following is a dash and a comment \- --
+-- The following is a comment --\-

@@ -1,5 +1,5 @@
 
-print('program loaded')
+print('example.lua invoked')
 
 local function onClick(event)
 

@@ -31,19 +31,25 @@ local strToBool = {
 }
 
 
-local function isinstance(ins, cls)
-	expect(1, ins, 'table')
-	expect(2, cls, 'table')
+local function isinstance(ins, ...)
+	expect(1, ins, 'table', 'nil')
+	local classes = {...}
+	if #classes == 0 then
+		return false
+	end
 	while ins do
 		local mt = getmetatable(ins)
 		if not mt then
-			return false
+			break
 		end
-		if mt == cls then
-			return true
+		for _, cls in ipairs(classes) do
+			if mt == cls then
+				return true
+			end
 		end
 		ins = mt
 	end
+	return false
 end
 
 local Event = {
@@ -108,11 +114,11 @@ end
 
 local Tag = {
 	-- name = string, -- the tag's name
+	single = false,
 	-- args = list,
 
 	parent = nil,
-	haschildren = true,
-	-- children = list,
+	children = nil, -- list or nil; will be nil when single is true
 
 	block = true, -- if it's a block tag
 	-- width = int or nil, -- integer or nil means unset
@@ -137,7 +143,9 @@ function Tag:new(obj, args)
 	obj = obj or {}
 	setmetatable(obj, { __index = self, __metatable = self })
 	obj.args = args
-	obj.children = {}
+	if not self.single then
+		obj.children = {}
+	end
 	obj.block = nil
 	if args.block then
 		obj.block = strToBool[args.block:lower()]
@@ -155,12 +163,35 @@ function Tag:new(obj, args)
 end
 
 function Tag:tostring()
-	local s = '/' .. (self.name or '<unknown>') .. textutils.serialise(self.args)
-	s = s .. '{\n'
-	for _, c in ipairs(self.children) do
-		s = s .. c:tostring() .. '\n'
+	local s = '/' .. (self.name or '<unknown>')
+	for k, v in pairs(self.args) do
+		if type(v) == 'string' then
+			s = s .. ' ' .. k .. '=' .. textutils.serialiseJSON(v)
+		end
 	end
-	s = s .. '}'
+	s = s .. '\n'
+	if not self.single then
+		local cs = ''
+		local last = nil
+		for _, c in ipairs(self.children) do
+			if #cs > 0 and last and last.name == '@plain' then
+				if c.name == '@plain' then
+					cs = cs .. ' '
+				else
+					cs = cs .. '\n'
+				end
+			end
+			last = c
+			cs = cs .. c:tostring()
+			for l in cs:gmatch('([^\n]*)\n') do
+				s = s .. '  ' .. l .. '\n'
+			end
+			cs = cs:match('([^\n]*)$') or ''
+		end
+		if #cs > 0 then
+			s = s .. '  ' .. cs .. '\n'
+		end
+	end
 	return s
 end
 
@@ -188,12 +219,12 @@ function Tag:ondraw(win, inline)
 	if self.bgcolor then
 		w.setBackgroundColor(self.bgcolor)
 	end
-	if haschildren then
+	if self.single then
+		self:draw(w)
+	else
 		for _, c in ipairs(self.children) do
 			c:ondraw(w)
 		end
-	else
-		self:draw(w)
 	end
 	if self.absolute then
 		local newX, newY = 1, 1
@@ -210,6 +241,7 @@ function Tag:ondraw(win, inline)
 		w.reposition(newX, newY)
 	end
 	w.setVisible(true)
+	w.redraw()
 end
 
 function Tag:draw(win)
@@ -235,6 +267,7 @@ exports.tags = tags
 
 local TagPlain = {
 	name = '@plain',
+	single = true,
 	block = false,
 	-- text = string,
 }
@@ -253,11 +286,14 @@ function TagPlain:tostring()
 end
 
 function TagPlain:draw(win)
+	print('drawing', self.text, win.getCursorPos())
 	win.write(self.text)
+	print('after draw', win.getCursorPos())
 end
 
 local TagBlit = {
 	name = '@blit',
+	single = true,
 	block = false,
 	-- text = string,
 	-- blitcolor = string,
@@ -278,7 +314,7 @@ function TagBlit:new(obj, text, color, bg)
 	return obj
 end
 
-function TagPlain:draw(win)
+function TagBlit:draw(win)
 	win.blit(self.text, self.blitcolor, self.blitbg)
 end
 
@@ -299,6 +335,8 @@ setmetatable(TagLink, { __index = Tag, __metatable = Tag })
 tags.a = TagLink
 
 function TagLink:new(obj, args)
+	expect(2, args, 'table', 'nil')
+	args = args or {}
 	obj = Tag.new(self, obj, args)
 	obj.target = args.target or args.t or args.href or nil
 	return obj
@@ -310,6 +348,7 @@ end
 
 local TagImg = {
 	name = 'img',
+	single = true,
 	block = true,
 	-- src = '', -- the images link
 }
@@ -317,6 +356,8 @@ setmetatable(TagImg, { __index = Tag, __metatable = Tag })
 tags.img = TagImg
 
 function TagImg:new(obj, args)
+	expect(2, args, 'table', 'nil')
+	args = args or {}
 	obj = Tag.new(self, obj, args)
 	obj.src = args.src or args.s or nil
 	return obj
@@ -326,6 +367,14 @@ end
 
 local function trim(str)
 	return str:match('^%s*(.-)%s*$')
+end
+
+local function trimLeft(str)
+	local i, j = str:find('^%s+')
+	if i then
+		return str:sub(j + 1)
+	end
+	return str
 end
 
 local function findAny(str, patterns, starti, endi)
@@ -344,18 +393,19 @@ local function findAny(str, patterns, starti, endi)
 	return ind, jnd
 end
 
-local function escapeStr(str)
-	local s = ''
-	local i = 1
-	local j = 0
-	while true do
-		j = line:find('\\', i)
-		if not j then
-			return s
-		end
-		s = s .. str:sub(i, j - 1) .. str:sub(j + 1, j + 1)
-		i = j + 2
-	end
+local function unescapeStr(str, tk)
+	return textutils.unserialiseJSON(tk .. str .. tk)
+	-- local s = ''
+	-- local i = 1
+	-- local j = 0
+	-- while true do
+	-- 	j = line:find('\\', i)
+	-- 	if not j then
+	-- 		return s
+	-- 	end
+	-- 	s = s .. str:sub(i, j - 1) .. str:sub(j + 1, j + 1)
+	-- 	i = j + 2
+	-- end
 end
 
 local function parseStr0(line, tk)
@@ -367,7 +417,7 @@ local function parseStr0(line, tk)
 				error('String missing end token ('..tk..')', 4)
 			end
 			if line:sub(i - 1, i - 1) ~= '\\' then
-				return escapeStr(line:sub(1, i - 1)), line:sub(i + 1)
+				return unescapeStr(line:sub(1, i - 1), tk), line:sub(i + 1)
 			end
 		end
 	else
@@ -390,12 +440,11 @@ end
 local function parseTag(line)
 	local name
 	do
-		local i, j = line:find('%s+')
-		if i then
-			name, line = line:sub(1, i - 1), line:sub(j + 1)
-		else
-			name, line = line, ''
+		local i, j = line:find('^[a-zA-Z0-9_-]+')
+		if not i then
+			error('Unexpected character "'..line:sub(1, 1)..'"')
 		end
+		name, line = line:sub(1, j), trimLeft(line:sub(j + 1))
 	end
 	local tagCls = tags[name]
 	if not tagCls then
@@ -403,12 +452,10 @@ local function parseTag(line)
 	end
 	local args = {}
 	while #line > 0 and line:sub(1, 1) ~= ';' do
-		if line:sub(1, 2) == '--' then
+		if #line == 1 and line:sub(1, 1) == '\\' then
+			return nil
+		elseif line:sub(1, 2) == '--' then
 			line = ''
-			break
-		end
-		if line:sub(1, 1) == ';' then
-			line = line:sub(j + 1)
 			break
 		end
 		local i, j = line:find('^[@a-zA-Z0-9_-]+')
@@ -432,6 +479,7 @@ local function parseTag(line)
 			end
 			line = line:sub(j + 1)
 		end
+		args[key] = value
 	end
 	local tag = tagCls:new(nil, args)
 	return tag, line
@@ -439,6 +487,7 @@ end
 
 local function parse(r)
 	local meta = nil
+	local scripts = {}
 	local body = nil -- RootTag
 	local current = nil
 	local line = ''
@@ -456,16 +505,27 @@ local function parse(r)
 		else
 			next = true
 		end
-		local tline = trim(line)
+		local tline = trimLeft(line)
 		line = '' -- clear cache
-		if #tline > 0 then
+		if #tline > 0 and tline:sub(1, 2) ~= '--' then
 			if body then
 				if tline:sub(1, 1) == '/' then -- a tag
 					local tag
 					tag, line = parseTag(tline:sub(2))
-					line:find('%s+;')
-					current:addChild(tag)
-					current = tag
+					if tag then
+						if line:sub(1, 1) == ';' then
+							next = false
+							line = line:sub(2)
+						end
+						current:addChild(tag)
+						if line:sub(1, 1) == ';' then -- two continue semicolon
+							line = line:sub(2)
+						elseif not tag.single then
+							current = tag
+						end
+					else
+						line = tline:sub(1, -2) .. ' '
+					end
 				else -- a plain text
 					local t = ''
 					local last = 1
@@ -473,6 +533,7 @@ local function parse(r)
 					while true do
 						local i = findAny(tline, {'\\', ';', '-%-'}, last)
 						if not i then
+							t = t .. tline:sub(last)
 							break
 						end
 						t = t .. tline:sub(last, i - 1)
@@ -482,6 +543,11 @@ local function parse(r)
 						end
 						if c == ';' then -- EOL
 							next = false
+							noeol = false
+							t = trim(t)
+							if #t > 0 then
+								current:addChild(TagPlain:new(nil, t))
+							end
 							if tline:sub(i + 1, i + 1) == ';' then
 								if current == body then
 									error('Cannot end the root node')
@@ -496,7 +562,7 @@ local function parse(r)
 						-- parse escape
 						if i == #tline then -- escape EOL
 							noeol = false
-							line = tline:sub(1, i - 1) + ' '
+							line = tline:sub(1, i - 1) .. ' '
 							break
 						end
 						c = tline:sub(i + 1, i + 1)
@@ -510,7 +576,10 @@ local function parse(r)
 						end
 					end
 					if noeol then
-						current:addChild(TagPlain:new(nil, t))
+						t = trim(t)
+						if #t > 0 then
+							current:addChild(TagPlain:new(nil, t))
+						end
 					end
 				end
 			elseif meta then
@@ -527,24 +596,32 @@ local function parse(r)
 						if not i then
 							error('Unexpected character "'..tline:sub(1, 1)..'"', 5)
 						end
-						local key, value
-						key, tline = tline:sub(1, j), tline:sub(j + 1)
+						local name, value
+						name, tline = tline:sub(1, j), tline:sub(j + 1)
 						if not tline:match('^[%s=]') then
 							error('Unexpected character "'..tline:sub(1, 1)..'"', 5)
 						end
 						value = tline:match('^%s*=?%s*(.*)')
-						meta[key] = value
+						if name == 'width' or name == 'height' then
+							meta[name] = tonumber(value)
+						elseif name == 'main' then
+							if scripts['__main'] then
+								error('Main script already exists')
+							end
+							local s = require(value)
+							scripts[value] = value
+							scripts['__main'] = s
+						elseif name == 'script' then
+							scripts[value] = require(value)
+						end
 					end
 				end
 			elseif tline == '@meta' then
-				meta = {}
+				meta = {
+					scripts = scripts,
+				}
 			end
 		end
-	end
-	do
-		local fd = io.open('tmp.txt', 'w')
-		fd:write(body:tostring())
-		fd:close()
 	end
 	return body
 end

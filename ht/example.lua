@@ -1,10 +1,16 @@
 
+local htcc = require("htcc")
+
 print('example.lua invoked')
 
-local function onClick(event)
+local exports = {}
 
+function exports.onload(event)
+	print('onload:', event)
 end
 
-return {
-	onClick = onClick,
-}
+function exports.onclick(event)
+	print('onclick:', event)
+end
+
+return exports

@@ -25,6 +25,9 @@ local ender_wireless_modem_id = 'computercraft:wireless_modem_advanced'
 local wireless_modem_id = 'computercraft:wireless_modem_normal'
 
 local function doUntil(c, failed, max)
+	if type(failed) == 'number' then
+		failed, max = nil, failed
+	end
 	local i = 0
 	local res
 	repeat

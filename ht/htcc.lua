@@ -85,9 +85,10 @@ end
 
 local OnloadEvent = {
 	name = 'load',
-	-- elem = ,
+	-- elem = RootTag,
 }
 setmetatable(OnloadEvent, { __index = Event, __metatable = Event })
+exports.OnloadEvent = OnloadEvent
 
 function OnloadEvent:new(obj, elem)
 	expect(1, obj, 'table', 'nil')
@@ -103,6 +104,7 @@ local ClickEvent = {
 	-- y = integer,
 }
 setmetatable(ClickEvent, { __index = Event, __metatable = Event })
+exports.ClickEvent = ClickEvent
 
 function ClickEvent:new(obj, x, y)
 	expect(1, obj, 'table', 'nil')
@@ -112,6 +114,72 @@ function ClickEvent:new(obj, x, y)
 	return obj
 end
 
+
+local ScriptSet = {
+	main = nil, -- the main script
+	-- map = table, -- the script map, include the main script
+}
+
+function ScriptSet:new(obj)
+	obj = obj or {}
+	setmetatable(obj, { __index = self, __metatable = self })
+	obj.map = {}
+	return obj
+end
+
+function ScriptSet:add(name)
+	local s = self.map[name]
+	if not s then
+		s = require(name)
+		self.map[name] = s
+	end
+	return s
+end
+
+function ScriptSet:addMain(name)
+	local s = self:add(name)
+	if self.main ~= nil then
+		error('Main script already exists')
+	end
+	self.main = name
+	return s
+end
+
+function ScriptSet:has(name)
+	return self.map[name] ~= nil
+end
+
+function ScriptSet:get(name)
+	return self.map[name]
+end
+
+function ScriptSet:symbol(symbol, typ)
+	local i = symbol:find('%.')
+	if not i then
+		error('Must give a package name with a dot')
+	end
+	local pkt
+	if i == 1 then
+		pkt = self:get(self.main)
+	else
+		pkt = self:get(symbol:sub(1, i - 1))
+	end
+	symbol = symbol:sub(i)
+	local value = pkt
+	for name in symbol:gmatch('%.([^.]+)') do
+		if value == nil then
+			if typ ~= nil then
+				error(string.format('Unexpected type for %s, expect function, but symbol is undefined', symbol), 1)
+			end
+			return nil
+		end
+		value = value[name]
+	end
+	if typ ~= nil and type(value) ~= typ then
+		error(string.format('Unexpected type for %s, expect %s, but got %s', symbol, typ, type(value)), 1)
+	end
+	return value
+end
 
 ---- BEGIN TAGS ----
 
@@ -136,6 +204,9 @@ local Tag = {
 
 	-- color = color or nil, -- The text color or nil means current color
 	-- bgcolor = color or nil, -- The background color
+
+	-- listeners = table,
+	_parsed_listeners = false,
 }
 exports.Tag = Tag
 
@@ -155,14 +226,32 @@ function Tag:new(obj, args)
 	end
 	obj.width = tonumber(args.width) or nil
 	obj.height = tonumber(args.height) or nil
-	obj.absolute = tonumber(args.width) or nil
+	obj.absolute = strToBool[args.abs]
 	obj.top = tonumber(args.top) or nil
 	obj.left = tonumber(args.left) or nil
 	obj.bottom = tonumber(args.bottom) or nil
 	obj.right = tonumber(args.right) or nil
 	obj.color = parseColor(args.color) or parseColor(args.c) or nil
 	obj.bgcolor = parseColor(args.bgcolor) or parseColor(args.bgc) or nil
+	obj.listeners = {}
 	return obj
+end
+
+function Tag:parseListener(scripts)
+	assert(not self._parsed_listeners, 'parseListener can only be called once')
+	for k, v in pairs(self.args) do
+		if k:sub(1, 1) == '@' then
+			k = k:sub(2)
+			local fn = scripts:symbol(v, 'function')
+			local l = self.listeners[k]
+			if l then
+				l[#l + 1] = fn
+			else
+				self.listeners[k] = {fn}
+			end
+		end
+	end
+	return self
 end
 
 function Tag:tostring()
@@ -177,8 +266,8 @@ function Tag:tostring()
 		local cs = ''
 		local last = nil
 		for _, c in ipairs(self.children) do
-			if #cs > 0 and last and last.name == '@plain' then
-				if c.name == '@plain' then
+			if #cs > 0 and last and last.name == '&plain' then
+				if c.name == '&plain' then
 					cs = cs .. ' '
 				else
 					cs = cs .. '\n'
@@ -217,49 +306,52 @@ end
 function Tag:ondraw(win)
 	local pWidth, pHeight = win.getSize()
 	local pX, pY = win.getCursorPos()
+	local wX, wY = pX, pY
 	if self.absolute then
-		pX, pY = 1, 1
+		wX, wY = 1, 1
 	end
-	local nWidth, nHeight = self.width or (pWidth - pX + 1), self.height or (pHeight - pY + 1)
-	-- print('window:', pX, pY, nWidth, nHeight)
-	-- print(self:tostring())
-	local w = window.create(win, pX, pY, nWidth, nHeight, not false) -- draw it later
-	-- win.setCursorBlink(true)
+	local nWidth, nHeight = self.width or (pWidth - wX + 1), self.height or (pHeight - wY + 1)
+	local w = window.create(win, wX, wY, nWidth, nHeight, false) -- draw it later
+	win.setCursorBlink(true)
 	w.setTextColor(self:getColor() or win.getTextColor())
 	w.setBackgroundColor(self:getBgcolor() or win.getBackgroundColor())
 	w.clear()
-	sleep(0.2)
 	-- if true then return end
 	if self.single then
 		self:draw(w)
 	else
 		local lastblock = nil
-		for i, c in ipairs(self.children) do
-			if i ~= 1 and c.block or lastblock then
+		for _, c in ipairs(self.children) do
+			if lastblock ~= nil and not c.absolute and (c.block or lastblock) then
 				local _, y = w.getCursorPos()
 				w.setCursorPos(1, y + 1)
 			end
-			lastblock = c.block
+			if not c.absolute then
+				lastblock = c.block
+			end
 			c:ondraw(w)
 		end
 	end
 	if self.absolute then
 		local newX, newY = 1, 1
+		local width, height = w.getCursorPos()
 		if self.left then
 			newX = self.left
 		elseif self.right then
-			newX = nWidth - self.right + 1
+			newX = pWidth - self.right - width + 1
 		end
 		if self.top then
-			newX = self.top
+			newY = self.top
 		elseif self.bottom then
-			newX = nHeight - self.bottom + 1
+			newY = pHeight - self.bottom - height + 1
 		end
-		w.reposition(newX, newY)
+		w.reposition(newX, newY, width, height)
 	end
 	w.setVisible(true)
-	w.redraw()
-	do
+	-- w.redraw() -- auto called in setVisible
+	if self.absolute then
+		win.setCursorPos(pX, pY)
+	else
 		-- fix cursor position
 		local dx, dy = w.getPosition()
 		local x, y = w.getCursorPos()
@@ -274,7 +366,7 @@ function Tag:onclick(event)
 end
 
 local RootTag = {
-	name = '@root',
+	name = '&root',
 	block = true,
 }
 setmetatable(RootTag, { __index = Tag, __metatable = Tag })
@@ -290,7 +382,7 @@ local tags = {}
 exports.tags = tags
 
 local TagPlain = {
-	name = '@plain',
+	name = '&plain',
 	single = true,
 	block = false,
 	-- text = string,
@@ -314,7 +406,7 @@ function TagPlain:draw(win)
 end
 
 local TagBlit = {
-	name = '@blit',
+	name = '&blit',
 	single = true,
 	block = false,
 	-- text = string,
@@ -500,7 +592,7 @@ local function parseTag(line)
 			line = ''
 			break
 		end
-		local i, j = line:find('^[@a-zA-Z0-9_-]+')
+		local i, j = line:find('^@?[a-zA-Z0-9_-]+')
 		if not i then
 			error('Unexpected character "'..line:sub(1, 1)..'"')
 		end
@@ -529,7 +621,7 @@ end
 
 local function parse(r)
 	local meta = nil
-	local scripts = {}
+	local scripts = ScriptSet:new()
 	local body = nil -- RootTag
 	local current = nil
 	local line = ''
@@ -555,6 +647,7 @@ local function parse(r)
 					local tag
 					tag, line = parseTag(tline:sub(2))
 					if tag then
+						tag = tag:parseListener(scripts)
 						if line:sub(1, 1) == ';' then
 							next = false
 							line = line:sub(2)
@@ -647,13 +740,15 @@ local function parse(r)
 						elseif name == 'color' or name == 'bgcolor' then
 							meta[name] = parseColor(value)
 						elseif name == 'main' then
+							scripts:addMain(value)
 							if scripts['__main'] then
 								error('Main script already exists')
 							end
 							local s = require(value)
-							scripts[value] = value
+							scripts[value] = s
 							scripts['__main'] = s
 						elseif name == 'script' then
+							scripts:add(value)
 							scripts[value] = require(value)
 						end
 					end

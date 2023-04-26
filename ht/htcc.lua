@@ -9,6 +9,9 @@ local function parseColor(c)
 	if c == nil then
 		return nil
 	end
+	if type(c) == 'number' then
+		return c
+	end
 	if #c == 0 then
 		error("Color must be a hex character or a color's name", 1)
 	end
@@ -195,34 +198,48 @@ function Tag:tostring()
 	return s
 end
 
+function Tag:getColor()
+	return self.color or table.unpack(self.parent and {self.parent:getColor()} or {nil})
+end
+
+function Tag:getBgcolor()
+	return self.bgcolor or table.unpack(self.parent and {self.parent:getBgcolor()} or {nil})
+end
+
 function Tag:addChild(child)
 	assert(isinstance(child, Tag), 'child must be a tag, got '..type(child))
-	assert(child.parent == nil)
+	assert(child.parent == nil, 'The element already have a parent')
 	child.parent = self
 	self.children[#(self.children) + 1] = child
 	return child
 end
 
-function Tag:ondraw(win, inline)
+function Tag:ondraw(win)
 	local pWidth, pHeight = win.getSize()
 	local pX, pY = win.getCursorPos()
 	if self.absolute then
 		pX, pY = 1, 1
-	elseif self.block and inline then
-		pX, pY = 1, pY + 1
 	end
 	local nWidth, nHeight = self.width or (pWidth - pX + 1), self.height or (pHeight - pY + 1)
-	local w = window.create(win, pX, pY, nWidth, nHeight, false) -- draw it later
-	if self.color then
-		w.setTextColor(self.color)
-	end
-	if self.bgcolor then
-		w.setBackgroundColor(self.bgcolor)
-	end
+	-- print('window:', pX, pY, nWidth, nHeight)
+	-- print(self:tostring())
+	local w = window.create(win, pX, pY, nWidth, nHeight, not false) -- draw it later
+	-- win.setCursorBlink(true)
+	w.setTextColor(self:getColor() or win.getTextColor())
+	w.setBackgroundColor(self:getBgcolor() or win.getBackgroundColor())
+	w.clear()
+	sleep(0.2)
+	-- if true then return end
 	if self.single then
 		self:draw(w)
 	else
-		for _, c in ipairs(self.children) do
+		local lastblock = nil
+		for i, c in ipairs(self.children) do
+			if i ~= 1 and c.block or lastblock then
+				local _, y = w.getCursorPos()
+				w.setCursorPos(1, y + 1)
+			end
+			lastblock = c.block
 			c:ondraw(w)
 		end
 	end
@@ -242,6 +259,12 @@ function Tag:ondraw(win, inline)
 	end
 	w.setVisible(true)
 	w.redraw()
+	do
+		-- fix cursor position
+		local dx, dy = w.getPosition()
+		local x, y = w.getCursorPos()
+		win.setCursorPos(dx + x - 1, dy + y - 1)
+	end
 end
 
 function Tag:draw(win)
@@ -252,6 +275,7 @@ end
 
 local RootTag = {
 	name = '@root',
+	block = true,
 }
 setmetatable(RootTag, { __index = Tag, __metatable = Tag })
 
@@ -282,13 +306,11 @@ function TagPlain:new(obj, text)
 end
 
 function TagPlain:tostring()
-	return self.text
+	return textutils.serialiseJSON(self.text)
 end
 
 function TagPlain:draw(win)
-	print('drawing', self.text, win.getCursorPos())
 	win.write(self.text)
-	print('after draw', win.getCursorPos())
 end
 
 local TagBlit = {
@@ -324,6 +346,26 @@ local TagP = {
 }
 setmetatable(TagP, { __index = Tag, __metatable = Tag })
 tags.p = TagP
+
+local TagT = {
+	name = 't',
+	block = false,
+}
+setmetatable(TagT, { __index = Tag, __metatable = Tag })
+tags.t = TagT
+
+local TagBr = {
+	name = 'br',
+	single = true,
+	block = false,
+}
+setmetatable(TagBr, { __index = Tag, __metatable = Tag })
+tags.br = TagBr
+
+function TagBr:ondraw(win)
+	local _, y = win.getCursorPos()
+	win.setCursorPos(1, y + 1)
+end
 
 local TagLink = {
 	name = 'a',
@@ -544,8 +586,7 @@ local function parse(r)
 						if c == ';' then -- EOL
 							next = false
 							noeol = false
-							t = trim(t)
-							if #t > 0 then
+							if not t:find('^%s+$') then
 								current:addChild(TagPlain:new(nil, t))
 							end
 							if tline:sub(i + 1, i + 1) == ';' then
@@ -576,8 +617,7 @@ local function parse(r)
 						end
 					end
 					if noeol then
-						t = trim(t)
-						if #t > 0 then
+						if not t:find('^%s+$') then
 							current:addChild(TagPlain:new(nil, t))
 						end
 					end
@@ -604,6 +644,8 @@ local function parse(r)
 						value = tline:match('^%s*=?%s*(.*)')
 						if name == 'width' or name == 'height' then
 							meta[name] = tonumber(value)
+						elseif name == 'color' or name == 'bgcolor' then
+							meta[name] = parseColor(value)
 						elseif name == 'main' then
 							if scripts['__main'] then
 								error('Main script already exists')

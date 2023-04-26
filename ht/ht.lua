@@ -17,6 +17,7 @@ function main(args)
 	local htBody = htcc.parse(fd)
 
 	local monitor = peripheral.find('monitor')
+	monitor.setCursorPos(1, 1)
 	htBody:ondraw(monitor)
 
 	if true then return end

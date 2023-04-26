@@ -3,8 +3,11 @@ This is comment area
 
 @meta
 
-width 40
+width 60
 height 20
+-- see more about color at <https://tweaked.cc/module/colors.html>
+color 0
+bgcolor 1
 
 main example -- the script "example.lua" will be invoked just after this line. `onload` function will be called after the page is parsed
 script other_script -- same as above, but `onload` function won't be called
@@ -12,7 +15,7 @@ script other_script -- same as above, but `onload` function won't be called
 @body
 
 /p center -- "p" is the basic tag
-	Hello; /p c=red; my;; world! -- single semicolon means EOL; double semicolon means ends of a tag
+	Hello ;/t c=red; my ;; world! -- single semicolon means EOL; double semicolon means ends of a tag
 	;;
 
 /p @click=other_script.some_function
@@ -23,8 +26,8 @@ script other_script -- same as above, but `onload` function won't be called
 	>> GO to tweaked.cc
 	;;
 
-/img abs=true right=6 bottom="5"\
- src=https://tweaked.cc/pack.png width=5 height=5 @click=.imgClick
+-- /img abs=true right=6 bottom="5"\
+ -- src=https://tweaked.cc/pack.png width=5 height=5 @click=.imgClick
 	-- `@` means an action, `@click` means click action and it will call imgClick in example.lua
 
 /p id=textid
@@ -37,12 +40,18 @@ line text
 /p; This is a normal slash \/ ;;
 /p; This is a normal slash too / ;;
 /p; This is a normal semicolon \; ;;
--- They is only one semicolon \;;
--- This is only one semicolon too \; ;
--- This is a normal backslash \\
--- They are two backslashs \\\\
+/p; They is only one semicolon \;; ;;
+/p; This is only one semicolon too \; ; ;;
+This is a normal backslash \\
+/br
+They are two backslashs \\\\
+/br
 
--- The following is not a comment, but two dashes \--
--- The following is three dashes \---
--- The following is a dash and a comment \- --
--- The following is a comment --\-
+The following is not a comment, but two dashes \--
+/br
+The following is three dashes \---
+/br
+The following is a dash and a comment \- --
+/br
+The following is a comment --\-
+/br

@@ -25,13 +25,45 @@ local function parseColor(c)
 	return n
 end
 
-local strToBool = {
-	['true'] = true,
-	t = true,
-	yes = true,
-	y = true,
-	ok = true,
-}
+local function sendMessage(chatbox, msg, msgPrompt, target)
+	if type(msg) == 'table' then
+		if msg['text'] == nil then -- if it's an array
+			msg = {
+				text = '',
+				extra = msg,
+			}
+		end
+		msg = textutils.serialiseJSON(msg)
+	elseif type(msg) ~= 'str' then
+		error('Message must be a string or a table')
+	end
+	if target then
+		local ok, err
+		-- try for 1.05s
+		for i = 0, 101 do
+			ok, err = chatbox.sendFormattedMessageToPlayer(msg, target, msgPrompt)
+			if ok then
+				break
+			end
+			sleep(0.05)
+		end
+		if not ok then
+			printError('Cannot send message to player:', ok, err)
+		end
+	else
+		local ok, err
+		for i = 0, 101 do
+			ok, err = chatbox.sendFormattedMessage(msg, msgPrompt)
+			if ok then
+				break
+			end
+			sleep(0.05)
+		end
+		if not ok then
+			printError('Cannot send message:', ok, err)
+		end
+	end
+end
 
 
 local function isinstance(ins, ...)
@@ -100,17 +132,29 @@ end
 local ClickEvent = {
 	name = 'click',
 	cancelable = true,
+	-- elem = Tag,
 	-- x = integer,
 	-- y = integer,
+	-- absX = integer,
+	-- absY = integer,
 }
 setmetatable(ClickEvent, { __index = Event, __metatable = Event })
 exports.ClickEvent = ClickEvent
 
-function ClickEvent:new(obj, x, y)
+function ClickEvent:new(obj, elem, x, y, absX, absY)
 	expect(1, obj, 'table', 'nil')
-	expect(2, x, 'number')
-	expect(3, y, 'number')
-	obj = Event.new(self, obj, { x = x, y = y })
+	expect(2, elem, 'table')
+	expect(3, x, 'number')
+	expect(4, y, 'number')
+	expect(5, absX, 'number')
+	expect(6, absY, 'number')
+	obj = Event.new(self, obj, {
+		elem = elem,
+		x = x,
+		y = y,
+		absX = absX,
+		absY = absY,
+	})
 	return obj
 end
 
@@ -181,6 +225,247 @@ function ScriptSet:symbol(symbol, typ)
 	return value
 end
 
+---- BEGIN VIEWBOX ----
+
+local allOverflowMode = {
+	['hidden'] = true,
+	['visible'] = true,
+}
+
+function createView(mWidth, mHeight)
+	expect(1, mWidth, 'number', 'nil')
+	expect(2, mHeight, 'number', 'nil')
+
+	local view = {}
+
+	local maxWidth, maxHeight = mWidth, mHeight
+	local cursorX = 1
+	local cursorY = 1
+	local textColor = colors.white
+	local backgroundColor = colors.black
+	local cursorBlink = false
+	local lines = {}
+	local usedY = 0
+
+	function view.drawOn(win, dx, dy, width, height, overflowMode)
+		expect(1, win, 'table')
+		expect(2, dx, 'number')
+		expect(3, dy, 'number')
+		expect(4, width, 'number')
+		expect(5, height, 'number')
+		expect(6, overflowMode, 'string', 'nil')
+		overflowMode = overflowMode or 'hidden'
+		if not allOverflowMode[overflowMode] then
+			error('Unknown overflow mode "' .. overflowMode .. '"', 1)
+		end
+		local tc = colors.toBlit(textColor)
+		local bc = colors.toBlit(backgroundColor)
+		win.setCursorBlink(cursorBlink)
+		local maxWidth, maxHeight = win.getSize()
+		maxWidth, maxHeight = maxWidth - dx + 1, maxHeight - dy + 1
+		if overflowMode == 'hidden' then
+			height = math.min(height, maxHeight)
+		end
+		for i = 1, height do
+			local l = lines[i]
+			local s, t, b
+			if l then
+				s, t, b = table.unpack(l)
+			else
+				s, t, b = string.rep(' ', width), tc:rep(width), bc:rep(width)
+			end
+			if #s < width then
+				local a = width - #s
+				s, t, b = s .. string.rep(' ', a), t .. tc:rep(a), b .. bc:rep(a)
+			elseif #s > width then
+				if overflowMode == 'hidden' then
+					s, t, b = s:sub(1, width), t:sub(1, width), b:sub(1, width)
+				end
+			end
+			win.setCursorPos(dx, dy + i - 1)
+			win.blit(s, t, b)
+		end
+	end
+
+	function view.clearLine()
+		lines[cursorY] = nil
+		if cursorY == usedY then
+			usedY = usedY - 1
+		end
+	end
+
+	function view.clear()
+		lines = {}
+		usedY = 0
+	end
+
+	function view.getLine(y)
+		expect(1, y, 'number')
+		return lines[y]
+	end
+
+	function view.scroll(n)
+		expect(1, n, 'number')
+		n = math.floor(n)
+		if usedY > 0 then
+			if n > 0 then
+				if n >= usedY then
+					view.clear()
+				else
+					for i = 1, usedY - n do
+						lines[i] = lines[i + n]
+					end
+					usedY = usedY - n
+				end
+			elseif n < 0 then
+				if n <= -usedY then
+					view.clear()
+				else
+					for i = usedY, 1, -1 do
+						lines[i + n] = lines[i]
+					end
+					usedY = usedY + n
+				end
+			end
+		end
+	end
+
+	function view.getCursorBlink()
+		return cursorBlink
+	end
+
+	function view.setCursorBlink(blink)
+		expect(1, blink, 'boolean')
+		cursorBlink = blink
+	end
+
+	function view.getCursorPos()
+		return cursorX, cursorY
+	end
+
+	function view.setCursorPos(x, y)
+		expect(1, x, 'number')
+		expect(2, y, 'number')
+		cursorX, cursorY = x, y
+	end
+
+	function view.nextLine()
+		cursorX, cursorY = 1, cursorY + 1
+	end
+
+	function view.getSize()
+		return maxWidth, maxHeight
+	end
+
+	function view.setSize(mWidth, mHeight)
+		maxWidth, maxHeight = mWidth, mHeight
+	end
+
+	function view.getUsedSize()
+		local usedX = 0
+		for y = 1, usedY do
+			local l = lines[y]
+			if l then
+				local s = l[1]
+				usedX = math.max(usedX, #s)
+			end
+		end
+		return usedX, usedY
+	end
+
+	function view.isColor()
+		return true
+	end
+
+	view.isColour = view.isColor
+
+	function view.getTextColor()
+		return textColor
+	end
+
+	view.getTextColour = view.getTextColor
+
+	function view.setTextColor(color)
+		expect(1, color, 'number')
+		textColor = color
+	end
+
+	view.setTextColour = view.setTextColor
+
+	function view.getBackgroundColor()
+		return backgroundColor
+	end
+
+	view.getBackgroundColour = view.getBackgroundColor
+
+	function view.setBackgroundColor(color)
+		expect(1, color, 'number')
+		backgroundColor = color
+	end
+
+	view.setBackgroundColour = view.setBackgroundColor
+
+	local function internalBlit(data, color, bgcolor)
+		expect(1, data, 'string')
+		expect(2, color, 'string')
+		expect(3, bgcolor, 'string')
+		assert(#data == #color and #data == #bgcolor, "Text's length is not match the colors' length")
+		if #data == 0 then
+			return cursorX
+		end
+		local l = lines[cursorY]
+		local nl
+		if l then
+			local newX = cursorX + #data
+			lines[cursorY] = {
+				l[1]:sub(1, cursorX - 1) .. data .. l[1]:sub(newX + 1),
+				l[2]:sub(1, cursorX - 1) .. color .. l[2]:sub(newX + 1),
+				l[3]:sub(1, cursorX - 1) .. bgcolor .. l[3]:sub(newX + 1)
+			}
+			cursorX = newX
+		else
+			lines[cursorY] = { 
+				string.rep(' ', cursorX - 1) .. data,
+				string.rep(colors.toBlit(textColor), cursorX - 1) .. color,
+				string.rep(colors.toBlit(backgroundColor), cursorX - 1) .. bgcolor
+			}
+			cursorX = #data
+		end
+		if cursorY > usedY then
+			usedY = cursorY
+		end
+		return cursorX, usedY
+	end
+
+	function view.write(data)
+		data = tostring(data)
+		return internalBlit(data,
+			colors.toBlit(textColor):rep(#data),
+			colors.toBlit(backgroundColor):rep(#data))
+	end
+
+	function view.blit(data, color, bgcolor)
+		return internalBlit(data, color:lower(), bgcolor:lower())
+	end
+
+	return view
+end
+
+---- END VIEWBOX ----
+
+local strToBool = {
+	['true'] = true,
+	t = true,
+	yes = true,
+	y = true,
+	ok = true,
+
+	['false'] = false,
+	f = false,
+	no = false,
+	n = false,
+}
+
 ---- BEGIN TAGS ----
 
 local Tag = {
@@ -191,12 +476,16 @@ local Tag = {
 	parent = nil,
 	children = nil, -- list or nil; will be nil when single is true
 
+	--- begin args ---
+
+	visible = true,
 	block = true, -- if it's a block tag
 	-- width = int or nil, -- integer or nil means unset
 	-- height = int or nil, -- integer or nil means unset
+	overflow = 'hidden', -- enum of ['hidden', 'visible'] -- TODO 'break', 'scroll'
 
 	-- -- See absolute section at <https://developer.mozilla.org/en-US/docs/Web/CSS/position> for more information
-	-- absolute = boolean, -- if it use absolute position
+	absolute = false, -- boolean; if it use absolute position
 	-- top    = int or nil,
 	-- left   = int or nil,
 	-- bottom = int or nil,
@@ -207,6 +496,12 @@ local Tag = {
 
 	-- listeners = table,
 	_parsed_listeners = false,
+
+	--- end args ---
+
+	-- _view = view,
+	-- _dx = number,
+	-- _dy = number,
 }
 exports.Tag = Tag
 
@@ -221,12 +516,17 @@ function Tag:new(obj, args)
 		obj.children = {}
 	end
 	obj.block = nil
+	if args.visible then
+		obj.visible = strToBool[args.visible:lower()]
+	end
 	if args.block then
 		obj.block = strToBool[args.block:lower()]
 	end
 	obj.width = tonumber(args.width) or nil
 	obj.height = tonumber(args.height) or nil
-	obj.absolute = strToBool[args.abs]
+	if args.abs then
+		obj.absolute = strToBool[args.abs:lower()]
+	end
 	obj.top = tonumber(args.top) or nil
 	obj.left = tonumber(args.left) or nil
 	obj.bottom = tonumber(args.bottom) or nil
@@ -234,6 +534,7 @@ function Tag:new(obj, args)
 	obj.color = parseColor(args.color) or parseColor(args.c) or nil
 	obj.bgcolor = parseColor(args.bgcolor) or parseColor(args.bgc) or nil
 	obj.listeners = {}
+	obj._view = createView()
 	return obj
 end
 
@@ -292,7 +593,7 @@ function Tag:getColor()
 end
 
 function Tag:getBgcolor()
-	return self.bgcolor or table.unpack(self.parent and {self.parent:getBgcolor()} or {nil})
+	return self.bgcolor or table.unpack(self.parent and { self.parent:getBgcolor() } or { nil })
 end
 
 function Tag:addChild(child)
@@ -303,7 +604,11 @@ function Tag:addChild(child)
 	return child
 end
 
-function Tag:ondraw(win)
+function Tag:draw(win)
+	if not self.visible then
+		return
+	end
+
 	local pWidth, pHeight = win.getSize()
 	local pX, pY = win.getCursorPos()
 	local wX, wY = pX, pY
@@ -311,58 +616,107 @@ function Tag:ondraw(win)
 		wX, wY = 1, 1
 	end
 	local nWidth, nHeight = self.width or (pWidth - wX + 1), self.height or (pHeight - wY + 1)
-	local w = window.create(win, wX, wY, nWidth, nHeight, false) -- draw it later
-	win.setCursorBlink(true)
-	w.setTextColor(self:getColor() or win.getTextColor())
-	w.setBackgroundColor(self:getBgcolor() or win.getBackgroundColor())
-	w.clear()
+	self._view.setCursorPos(1, 1)
+	self._view.setSize(nWidth, nHeight)
+	self._view.setTextColor(self:getColor() or win.getTextColor())
+	self._view.setBackgroundColor(self:getBgcolor() or win.getBackgroundColor())
+	self._view.clear()
 	-- if true then return end
 	if self.single then
-		self:draw(w)
+		self:ondraw(self._view)
 	else
 		local lastblock = nil
 		for _, c in ipairs(self.children) do
 			if lastblock ~= nil and not c.absolute and (c.block or lastblock) then
-				local _, y = w.getCursorPos()
-				w.setCursorPos(1, y + 1)
+				self._view.nextLine()
 			end
 			if not c.absolute then
 				lastblock = c.block
 			end
-			c:ondraw(w)
+			c:draw(self._view)
 		end
 	end
+	local uWidth, uHeight = self._view.getUsedSize()
+	uWidth, uHeight = self.width or uWidth, self.height or uHeight
 	if self.absolute then
-		local newX, newY = 1, 1
-		local width, height = w.getCursorPos()
+		local dX, dY = 1, 1
 		if self.left then
-			newX = self.left
+			dX = self.left
 		elseif self.right then
-			newX = pWidth - self.right - width + 1
+			dX = pWidth - self.right - uWidth + 1
 		end
 		if self.top then
-			newY = self.top
+			dY = self.top
 		elseif self.bottom then
-			newY = pHeight - self.bottom - height + 1
+			dY = pHeight - self.bottom - uHeight + 1
 		end
-		w.reposition(newX, newY, width, height)
+		self._dx, self._dy = dX, dY
+	else
+		self._dx, self._dy = pX, pY
 	end
-	w.setVisible(true)
-	-- w.redraw() -- auto called in setVisible
+	self._view.drawOn(win, self._dx, self._dy, uWidth, uHeight, self.overflow)
+	-- fix cursor position
 	if self.absolute then
 		win.setCursorPos(pX, pY)
 	else
-		-- fix cursor position
-		local dx, dy = w.getPosition()
-		local x, y = w.getCursorPos()
-		win.setCursorPos(dx + x - 1, dy + y - 1)
+		win.setCursorPos(pX + uWidth, pY + uHeight - 1)
 	end
 end
 
-function Tag:draw(win)
+function Tag:ondraw(win)
+end
+
+function Tag:click(x, y, absX, absY)
+	if not self.visible then
+		return nil
+	end
+	if not self._dx or not self._dy then -- must be rendered at lease once
+		return nil
+	end
+	x, y = x - self._dx + 1, y - self._dy + 1
+	local uWidth, uHeight = self._view.getUsedSize()
+	uWidth, uHeight = self.width or uWidth, self.height or uHeight
+	if x < 1 or x > uWidth or y < 1 or y > uHeight then
+		return nil
+	end
+	local event = nil
+	if not self.single then
+		for i = #self.children, 1, -1 do -- z-index is reversed
+			local c = self.children[i]
+			if not c.absolute then
+				event = c:click(x, y, absX, absY)
+				if event then
+					if event.canceled then
+						return event
+					end
+					break
+				end
+			end
+		end
+	end
+	if not event then
+		event = ClickEvent:new(nil, self, x, y, absX, absY)
+	end
+	self:onclick(event)
+	if not event.canceled then
+		self:fireEvent(event)
+	end
+	return event
 end
 
 function Tag:onclick(event)
+end
+
+function Tag:fireEvent(event)
+	local lnrs = self.listeners[event.name]
+	if lnrs then
+		for _, l in ipairs(lnrs) do
+			l(event)
+			if event.canceled then
+				return
+			end
+		end
+	end
 end
 
 local RootTag = {
@@ -374,8 +728,28 @@ setmetatable(RootTag, { __index = Tag, __metatable = Tag })
 function RootTag:new(obj, metas)
 	expect(2, metas, 'table')
 	obj = Tag.new(self, obj, metas)
+	obj._mWidth = obj.width
+	obj._mHeight = obj.height
 	obj.scripts = metas.scripts
 	return obj
+end
+
+function RootTag:draw(win)
+	local w, h = win.getSize()
+	local x, y = win.getCursorPos()
+	self.width = w - x + 1
+	self.height = h - y + 1
+	if self._mWidth and self._mWidth < self.width then
+		self.width = self._mWidth
+	end
+	if self._mHeight and self._mHeight < self.Hhight then
+		self.Hhight = self._mHeight
+	end
+	return Tag.draw(self, win)
+end
+
+function RootTag:click(x, y)
+	return Tag.click(self, x, y, x, y)
 end
 
 local tags = {}
@@ -401,7 +775,7 @@ function TagPlain:tostring()
 	return textutils.serialiseJSON(self.text)
 end
 
-function TagPlain:draw(win)
+function TagPlain:ondraw(win)
 	win.write(self.text)
 end
 
@@ -428,7 +802,7 @@ function TagBlit:new(obj, text, color, bg)
 	return obj
 end
 
-function TagBlit:draw(win)
+function TagBlit:ondraw(win)
 	win.blit(self.text, self.blitcolor, self.blitbg)
 end
 
@@ -454,7 +828,7 @@ local TagBr = {
 setmetatable(TagBr, { __index = Tag, __metatable = Tag })
 tags.br = TagBr
 
-function TagBr:ondraw(win)
+function TagBr:draw(win)
 	local _, y = win.getCursorPos()
 	win.setCursorPos(1, y + 1)
 end
@@ -476,8 +850,27 @@ function TagLink:new(obj, args)
 	return obj
 end
 
-function TagLink:onclick(x, y)
-	print('Link:', obj.target)
+function TagLink:onclick(event)
+	event:cancel()
+	local cb = peripheral.find('chatBox')
+	if cb then
+		sendMessage(cb, {
+			text = self.target,
+			color = 'blue',
+			underlined = true,
+			clickEvent = {
+				action = 'open_url',
+				value = self.target,
+			},
+			hoverEvent = {
+				action = 'show_text',
+				value = self.target,
+			},
+		}, 'HT-Link')
+	else
+		print('Link:', self.target)
+	end
+	return true
 end
 
 local TagImg = {

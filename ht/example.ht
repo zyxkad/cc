@@ -3,7 +3,7 @@ This is comment area
 
 @meta
 
-width 60
+width 30
 -- height 20
 -- see more about color at <https://tweaked.cc/module/colors.html>
 color 0
@@ -22,7 +22,7 @@ script other_script -- same as above, but `onload` function won't be called
 	Call 'some_function' in 'other_script.lua'
 	;;
 
-/a abs=true bottom=0 right=0 target=https://tweaked.cc/ -- "a" is the tag for open the link in user's browser (send a link to the user)
+/a abs=true right=1 bottom=1 target=https://tweaked.cc/ -- "a" is the tag for open the link in user's browser (send a link to the user)
 	>> GO to tweaked.cc
 	;;
 

@@ -33,6 +33,7 @@ local function doUntil(c, failed, max)
 	repeat
 		i = i + 1
 		res = {c()}
+		sleep(0)
 	until res[1] or (max and i >= max) or (failed and failed(table.unpack(res)))
 	return table.unpack(res)
 end

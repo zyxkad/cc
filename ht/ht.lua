@@ -29,13 +29,15 @@ end
 
 local function render(outputName, files)
 	local output
-	if outputName == 'term' then
+	local isTerm = outputName == 'term'
+	if isTerm then
 		output = term.current()
 	else
 		output = peripheral.wrap(outputName)
 		if not output then
 			error(string.format('Peripheral %s is not found', outputName), 1)
 		end
+		output.clear()
 	end
 
 	local file = files[1]
@@ -50,9 +52,22 @@ local function render(outputName, files)
 			local event = {os.pullEvent()}
 			local ename = event[1]
 			local eargs = { table.unpack(event, 2) }
+			-- click event
+			if isTerm then
+				if ename == 'mouse_click' then
+					if root.visible then
+						root:click(eargs[2], eargs[3])
+					end
+				elseif ename == 'mouse_scroll' then
+					-- TODO: scroll page
+				end
+			elseif ename == 'monitor_touch' and eargs[1] == outputName then
+				if root.visible then
+					root:click(eargs[2], eargs[3])
+				end
+			end
 			output.setCursorPos(1, 1)
-			root:onOsEvent(ename, eargs)
-			root:ondraw(output)
+			root:draw(output)
 		end
 	end)
 end

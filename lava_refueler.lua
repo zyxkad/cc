@@ -14,9 +14,19 @@ local function selectItem(item)
 	return false
 end
 
-function main()
-	local suck = turtle.suckUp
-	local drop = turtle.dropUp
+function main(args)
+	local direction = args[1]
+	local suck, drop
+	if direction == 'top' or direction == 'up' then
+		suck, drop = turtle.suckUp, turtle.dropUp
+		print('using direction up')
+	elseif direction == 'down' or direction == 'bottom' then
+		suck, drop = turtle.suckDown, turtle.dropDown
+		print('using direction down')
+	else
+		suck, drop = turtle.suck, turtle.drop
+		print('using direction front')
+	end
 	if turtle.getFuelLevel() == 'unlimited' then
 		print('Unlimited fuel')
 		return
@@ -66,4 +76,4 @@ function main()
 	print('Fuel end:', turtle.getFuelLevel(), 'out of', fuelLimit)
 end
 
-main()
+main({...})

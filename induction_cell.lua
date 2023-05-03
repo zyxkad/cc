@@ -59,6 +59,7 @@ local function formatSec(tm)
 end
 
 local energy = 0
+local maxEnergy = 0
 local inputRate = 0
 local outputRate = 0
 local lossing = false
@@ -228,7 +229,7 @@ local function main(args)
 					sendEnergyWarn()
 					lastWarn = os.clock()
 				end
-			elseif not lastLoosing and lossing then
+			elseif not lastLoosing and lossing and energy + outputRate * 2 < maxEnergy then
 				lastLoosing = true
 				sendMessage({
 					{

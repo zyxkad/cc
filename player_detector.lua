@@ -1,7 +1,21 @@
+-- Player Detector
+-- by zyxkad@gmail.com
 
 local pdor = peripheral.find("playerDetector")
 if not pdor then
 	error('No player detector was found')
+end
+
+local function getAndSavePlayerPos(p)
+	local data = pdor.getPlayerPos(p)
+	if data and data.dimension then
+		local fd, _ = io.open('ppos/'..p..'/'..data.dimension..'.dt', 'w')
+		if fd then
+			fd:write(textutils.serialise(data))
+			fd:close()
+		end
+	end
+	return data
 end
 
 local function showMonitor(mName)
@@ -26,7 +40,7 @@ local function showMonitor(mName)
 	while true do
 		local players = pdor.getOnlinePlayers()
 		for i, p in ipairs(players) do
-			local d = pdor.getPlayerPos(p)
+			local d = getAndSavePlayerPos(p)
 			monitor.setCursorPos(1, i)
 			monitor.clearLine()
 			if d and d.x then
@@ -45,7 +59,7 @@ local function showPocket()
 		local players = pdor.getOnlinePlayers()
 		local datas = {}
 		for _, p in ipairs(players) do
-			local d = pdor.getPlayerPos(p)
+			local d = getAndSavePlayerPos(p)
 			if d and d.x then
 				d.name = p
 				datas[#datas + 1] = d

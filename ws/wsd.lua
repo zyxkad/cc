@@ -3,6 +3,8 @@
 
 local VERSION = '0.1'
 
+local expect = require('cc.expect')
+
 settings.define('wsd.shell', {
 	description = 'The shell path to start program',
 	type = 'string',
@@ -187,9 +189,44 @@ local function reply(id, data)
 	}))
 end
 
-local function newFakeTerm(id)
+local function _newDefaultPalette()
+	-- have to be sync with https://tweaked.cc/module/colors.html
+	local palette = {
+		[colors.white]     = 0xF0F0F0,
+		[colors.orange]    = 0xF2B233,
+		[colors.magenta]   = 0xE57FD8,
+		[colors.lightBlue] = 0x99B2F2,
+		[colors.yellow]    = 0xDEDE6C,
+		[colors.lime]      = 0x7FCC19,
+		[colors.pink]      = 0xF2B2CC,
+		[colors.gray]      = 0x4C4C4C,
+		[colors.lightGray] = 0x999999,
+		[colors.cyan]      = 0x4C99B2,
+		[colors.purple]    = 0xB266E5,
+		[colors.blue]      = 0x3366CC,
+		[colors.brown]     = 0x7F664C,
+		[colors.green]     = 0x57A64E,
+		[colors.red]       = 0xCC4C4C,
+		[colors.black]     = 0x111111,
+	}
+	return palette
+end
+
+local function newFakeTerm(id, width, height)
+	expect(1, id, 'number')
+	expect(2, width, 'number')
+	expect(3, height, 'number')
+
 	local fkTerm = {
 		isFake = true,
+		_cursorBlink = false,
+		_cursorX = 1,
+		_cursorY = 1,
+		_width = width,
+		_height = height,
+		_textColor = colors.white,
+		_backgroundColor = colors.black,
+		_palette = _newDefaultPalette(),
 	}
 
 	local running = true
@@ -208,32 +245,168 @@ local function newFakeTerm(id)
 		running = false
 	end
 
-	local function newOper(name)
-		return function(...)
-			checkRunning()
-			local args = {...}
-			if #args == 0 then
-				args = textutils.empty_json_array
+	local function newOper(name, hasReply)
+		if hasReply then
+			return function(...)
+				checkRunning()
+				local args = {...}
+				if #args == 0 then
+					args = textutils.empty_json_array
+				end
+				local res = ask('term_oper', {
+					term = id,
+					oper = name,
+					args = args,
+				})
+				if res.status ~= 'ok' then
+					error(err, 1)
+				end
+				if res.res then
+					return table.unpack(res.res)
+				else
+					return
+				end
 			end
-			local res = ask('term_oper', {
-				term = id,
-				oper = name,
-				args = args,
-			})
-			if res.status ~= 'ok' then
-				error(err, 1)
-			end
-			if res.res then
-				return table.unpack(res.res)
-			else
-				return
+		else
+			return function(...)
+				checkRunning()
+				local args = {...}
+				if #args == 0 then
+					args = textutils.empty_json_array
+				end
+				ws.send(textutils.serialiseJSON({
+					type = 'term_oper',
+					data = {
+						term = id,
+						oper = name,
+						args = args,
+					},
+				}))
 			end
 		end
 	end
 
-	for n, _ in pairs(term.native()) do
-		fkTerm[n] = newOper(n)
+	local noReplyMethods = {
+		scroll = true,
+		clear = true,
+		clearLine = true,
+	}
+	for n, _ in pairs(noReplyMethods) do
+		fkTerm[n] = newOper(n, false)
 	end
+
+	function fkTerm.getSize()
+		return fkTerm._width, fkTerm._height
+	end
+
+	local _setCursorPos = newOper('setCursorPos', false)
+
+	function fkTerm.setCursorPos(x, y)
+		expect(1, x, 'number')
+		expect(2, y, 'number')
+		_setCursorPos(x, y)
+		fkTerm._cursorX, fkTerm._cursorY = x, y
+	end
+
+	function fkTerm.getCursorPos()
+		return fkTerm._cursorX, fkTerm._cursorY
+	end
+
+	local _setCursorBlink = newOper('setCursorBlink', false)
+
+	function fkTerm.setCursorBlink(blink)
+		expect(1, blink, 'boolean')
+		_setCursorBlink(blink)
+		fkTerm._cursorBlink = blink
+	end
+
+	function fkTerm.getCursorBlink()
+		return fkTerm._cursorBlink
+	end
+
+	local _setTextColor = newOper('setTextColor', false)
+
+	function fkTerm.setTextColor(color)
+		expect(1, color, 'number')
+		_setTextColor(color)
+		fkTerm._textColor = color
+	end
+	fkTerm.setTextColour = fkTerm.setTextColor
+
+	function fkTerm.getTextColor()
+		return fkTerm._textColor
+	end
+	fkTerm.getTextColour = fkTerm.getTextColor
+
+	local _setBackgroundColor = newOper('setBackgroundColor', false)
+
+	function fkTerm.setBackgroundColor(color)
+		expect(1, color, 'number')
+		_setBackgroundColor(color)
+		fkTerm._backgroundColor = color
+	end
+	fkTerm.setBackgroundColour = fkTerm.setBackgroundColor
+
+	function fkTerm.getBackgroundColor()
+		return fkTerm._backgroundColor
+	end
+	fkTerm.getBackgroundColour = fkTerm.getBackgroundColor
+
+	local _write = newOper('write', false)
+	function fkTerm.write(text)
+		expect(1, text, 'string')
+		_write(text)
+		fkTerm._cursorX = fkTerm._cursorX + #text
+	end
+
+	local _blit = newOper('blit', false)
+	function fkTerm.blit(text, color, bgColor)
+		expect(1, text, 'string')
+		expect(2, color, 'string')
+		expect(3, bgColor, 'string')
+		local len = #text
+		if len ~= #color or len ~= #bgColor then
+			error('The arguments must have the same length', 2)
+		end
+		_blit(text, color, bgColor)
+		fkTerm._cursorX = fkTerm._cursorX + len
+	end
+
+	function fkTerm.isColor()
+		return true
+	end
+	fkTerm.isColour = fkTerm.isColor
+
+	local _setPaletteColor = newOper('setPaletteColor', false)
+
+	function fkTerm.setPaletteColor(color, r, g, b)
+		expect(1, color, 'number')
+		if fkTerm._palette[color] == nil then
+			error('Unknown color ' .. color, 2)
+		end
+		expect(2, r, 'number')
+		if g ~= nil or b ~= nil then
+			expect(3, g, 'number')
+			expect(4, b, 'number')
+			r = colors.packRGB(r, g, b)
+			_setPaletteColor(color, r)
+			fkTerm._palette[color] = r
+		else
+			_setPaletteColor(color, r)
+			fkTerm._palette[color] = r
+		end
+	end
+	fkTerm.setPaletteColour = fkTerm.setPaletteColor
+
+	function fkTerm.getPaletteColor(color)
+		expect(1, color, 'number')
+		local c = fkTerm._palette[color]
+		if c == nil then
+			error('Unknown color ' .. color, 2)
+		end
+		return colors.unpackRGB(c)
+	end
+	fkTerm.getPaletteColour = fkTerm.getPaletteColor
 
 	return fkTerm
 end
@@ -270,7 +443,12 @@ end
 
 local programs = {}
 
-local function create_program(tid, path, args)
+local function create_program(tid, path, args, width, height)
+	expect(1, tid, 'number')
+	expect(2, path, 'string')
+	expect(3, args, 'table')
+	expect(4, width, 'number')
+	expect(5, height, 'number')
 	local prog = {
 		queuedEvents = {},
 	}
@@ -281,7 +459,7 @@ local function create_program(tid, path, args)
 		}
 		os.queueEvent('_yield')
 	end
-	local progTerm = newFakeTerm(tid)
+	local progTerm = newFakeTerm(tid, width, height)
 	local env = { shell = shell, multishell = multishell }
 	prog.term = progTerm
 	prog.thr = coroutine.create(function()
@@ -303,10 +481,7 @@ end
 local function programRunner()
 	local eventFilter = {}
 	local eventData = {}
-	local function resume_program(prog, eventData)
-		if eventData[1] == 'char' then
-			print('char input:', eventData[2])
-		end
+	local function resume_program(i, prog, eventData)
 		if eventFilter[prog] == nil or eventFilter[prog] == eventData[1] then
 			eventFilter[prog] = nil
 			oldTerm = term.redirect(prog.term)
@@ -329,11 +504,11 @@ local function programRunner()
 	end
 	while true do
 		for i, prog in pairs(programs) do
-			if resume_program(prog, eventData) and #prog.queuedEvents > 0 then
+			if resume_program(i, prog, eventData) and #prog.queuedEvents > 0 then
 				local events = prog.queuedEvents
 				prog.queuedEvents = {}
 				for _, edata in ipairs(events) do
-					resume_program(prog, edata)
+					resume_program(i, prog, edata)
 				end
 			end
 		end
@@ -408,15 +583,12 @@ local function listenWs()
 			print('Creating program:', msg.data.prog)
 			local path = shell.resolveProgram(msg.data.prog)
 			local args = msg.data.args or {}
+			local width, height = msg.data.width, msg.data.height
 			if not path then
 				reply(id, 'Program not found')
 				return
 			end
-			local prog = create_program(id, path, args)
-			prog.queueEvent('char', 't')
-			prog.queueEvent('char', 'e')
-			prog.queueEvent('char', 's')
-			prog.queueEvent('char', 't')
+			create_program(id, path, args, width, height)
 		end,
 		term_event = function(msg)
 			local tid = msg.term

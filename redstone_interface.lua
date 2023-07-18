@@ -41,11 +41,8 @@ end
 
 function RedstoneInterface:createFromStr(obj, data)
 	local i = data:find(':')
-	if not i then
-		error('Argument #1(data) must split by a colon')
-	end
-	local int = i > 0 and data:sub(1, i - 1) or redstone
-	local side = i > 0 and data:sub(i + 1) or data
+	local int = i and data:sub(1, i - 1) or redstone
+	local side = i and data:sub(i + 1) or data
 	return self:new(obj, int, side)
 end
 

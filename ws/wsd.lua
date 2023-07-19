@@ -354,7 +354,7 @@ local function newFakeTerm(id, width, height)
 
 	local _write = newOper('write', false)
 	function fkTerm.write(text)
-		expect(1, text, 'string')
+		text = tostring(text)
 		_write(text)
 		fkTerm._cursorX = fkTerm._cursorX + #text
 	end
@@ -424,8 +424,9 @@ local function tryConnect()
 				['User-Agent'] = string.format('cc-websocket-daemon/%s (%s)', VERSION, _HOST),
 				['X-CC-Auth'] = AUTH_TOKEN,
 				['X-CC-Host'] = SERVER,
-				['X-CC-ID'] = ''..os.getComputerID(),
+				['X-CC-ID'] = tostring(os.getComputerID()),
 				['X-CC-Device'] = getDeviceType(),
+				['X-CC-Label'] = os.getComputerLabel(),
 			}
 		)
 		if ws then
@@ -541,6 +542,9 @@ local function listenWs()
 		reply = function(msg)
 			os.queueEvent('_wsd_reply', msg.id, msg.data)
 		end,
+		ping = function(msg)
+			-- maybe will use later
+		end,
 
 		exec = function(msg)
 			local id = msg.id
@@ -551,7 +555,9 @@ local function listenWs()
 				})
 				return
 			end
-			local fn, err = loadstring(msg.data)
+			local fnenv = {}
+			setmetatable(fnenv, { __index = _G })
+			local fn, err = load(msg.data, nil, 't', fnenv)
 			if fn then
 				co_run(function()
 					local res = {pcall(fn)}
@@ -627,18 +633,25 @@ local function listenWs()
 	end
 end
 
+local function sendEvent(event)
+	local eventTyp = event[1]
+	if ignoreEvents[eventTyp] then
+		return
+	end
+	if eventTyp == 'websocket_message' and event[2] == HOST then
+		return
+	end
+	local eventArgs = {table.unpack(event, 2)}
+	pcall(ws.send, textutils.serialiseJSON({
+		type = 'event',
+		event = eventTyp,
+		args = eventArgs,
+	}))
+end
+
 local function listenEvent()
 	while true do
-		local event = {os.pullEvent()}
-		local eventTyp = event[1]
-		if not ignoreEvents[eventTyp] then
-			local eventArgs = {table.unpack(event, 2)}
-			pcall(ws.send, textutils.serialiseJSON({
-				type = 'event',
-				event = eventTyp,
-				args = eventArgs,
-			}))
-		end
+		sendEvent({os.pullEvent()})
 	end
 end
 

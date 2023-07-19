@@ -66,17 +66,18 @@ do
 		settings.save()
 
 		if fs.exists('/startup.lua') then
-			write('`/startup.lua` is already exists, do you want to move it to `/startup/00_startup.lua`? (yes/No)')
-			if read(nil, nil,
-				function(t) return completion.choice(t:lower(), {'yes', 'no'}) end):sub(1, 1):lower() ~= 'y' then
-				printError('Setup cancelled')
-				return false
-			end
-			if fs.exists('/startup/00_startup.lua') then
-				printError('`/startup/00_startup.lua` is already exists')
-				return false
-			end
-			fs.move('/startup.lua', '/startup/00_startup.lua')
+			fs.delete('/startup.lua')
+			-- write('`/startup.lua` is already exists, do you want to move it to `/startup/00_startup.lua`? (yes/No)')
+			-- if read(nil, nil,
+			-- 	function(t) return completion.choice(t:lower(), {'yes', 'no'}) end):sub(1, 1):lower() ~= 'y' then
+			-- 	printError('Setup cancelled')
+			-- 	return false
+			-- end
+			-- if fs.exists('/startup/00_startup.lua') then
+			-- 	printError('`/startup/00_startup.lua` is already exists')
+			-- 	return false
+			-- end
+			-- fs.move('/startup.lua', '/startup/00_startup.lua')
 		end
 		print(string.format('Moving %s to /startup.lua', progPath))
 		fs.move(progPath, '/startup.lua')

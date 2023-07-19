@@ -2,9 +2,9 @@
 -- by zyxkad@gmail.com
 
 -- configs
-local tankInputSide = 'left'
-local tankOutputSide = 'bottom'
-local refillWhenLessThan = 100
+local tankInputSide = 'right'
+local tankOutputSide = 'right'
+local refillWhenLessThan = 600
 local onlyGiveNetheriteCan = false
 
 -- constants
@@ -108,11 +108,16 @@ local function getTanks()
 end
 
 local function giveTank()
-	if not onlyGiveNetheriteCan and
-		 iv.addItemToPlayerNBT(tankOutputSide, 1, nil, { name=oxygenCanId }) == 1 then
+	if not onlyGiveNetheriteCan and (
+		iv.addItemToPlayerNBT(tankOutputSide, 1, nil, { name=oxygenCanId, fromSlot=1 }) == 1 or
+		iv.addItemToPlayerNBT(tankOutputSide, 1, nil, { name=oxygenCanId, fromSlot=0 }) == 1
+	) then
 		return oxygenCanId
 	end
-	if iv.addItemToPlayerNBT(tankOutputSide, 1, nil, { name=netheriteOxygenCanId }) == 1 then
+	if (
+		iv.addItemToPlayerNBT(tankOutputSide, 1, nil, { name=netheriteOxygenCanId, fromSlot=1 }) == 1 or
+		iv.addItemToPlayerNBT(tankOutputSide, 1, nil, { name=netheriteOxygenCanId, fromSlot=0 }) == 1
+	) then
 		return netheriteOxygenCanId
 	end
 	sendErrorMsg('Cound not find vaild oxygen can', iv.getOwner())
@@ -147,7 +152,7 @@ function main(args)
 							if not giveTank() and tank.oxygens > 0 then
 								break
 							end
-							if not iv.removeItemFromPlayerNBT(tankInputSide, 1, nil, { name=tank.name, fromSlot=tank.slot }) then
+							if not iv.removeItemFromPlayerNBT(tankInputSide, 1, nil, { name=tank.name, fromSlot=tank.slot, toSlot=0 }) then
 								break
 							end
 							sendMessage({

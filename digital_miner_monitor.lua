@@ -65,24 +65,26 @@ local function listenData()
 		if not l or l.i == id then
 			local d = datas[msg.id]
 			if msg.typ == 'pos' then
-				if d then
-					d.t = getTime()
-					d.x = msg.x
-					d.y = msg.y
-					d.z = msg.z
-					d.fuel = msg.fuel
-				else
-					d = {
-						t = getTime(),
-						i = id,
-						id = msg.id,
-						x = msg.x,
-						y = msg.y,
-						z = msg.z,
-						fuel = msg.fuel,
-						msg = 'unknown',
-					}
-					datas[msg.id] = d
+				if msg.x == msg.x then -- check not be nan
+					if d then
+						d.t = getTime()
+						d.x = msg.x
+						d.y = msg.y
+						d.z = msg.z
+						d.fuel = msg.fuel
+					else
+						d = {
+							t = getTime(),
+							i = id,
+							id = msg.id,
+							x = msg.x,
+							y = msg.y,
+							z = msg.z,
+							fuel = msg.fuel,
+							msg = 'unknown',
+						}
+						datas[msg.id] = d
+					end
 				end
 			elseif msg.typ == 'mining' then
 				if d then

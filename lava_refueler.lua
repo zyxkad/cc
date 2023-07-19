@@ -1,4 +1,5 @@
-
+-- Lava Refueler
+-- by zyxkad@gmail.com
 
 local bucketId = 'minecraft:bucket'
 local lavaBucketId = 'minecraft:lava_bucket'

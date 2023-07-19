@@ -1,12 +1,16 @@
 -- Digital miner
 -- by zyxkad@gmail.com
 
+-- startup command:
+-- shell.run('digital_miner.lua', 'placeAndForward', 'launch')
+
 if not turtle then
 	error('turtle API not found')
 end
 
 local debuging = false
-local enable_teleporter = false
+local enable_teleporter = true
+-- local lava_quantum_nbt = 
 
 local turtleLabel = os.getComputerLabel()
 if not turtleLabel then
@@ -14,14 +18,17 @@ if not turtleLabel then
 end
 
 local miner_frequency = turtleLabel
-local emergency_frequency = turtleLabel..'Err'
+local emergency_frequency = turtleLabel..'_E'
 local digital_miner_id = 'mekanism:digital_miner'
 local cable_id = 'mekanism:advanced_universal_cable'
+-- not using yet
 local transporter_id = 'mekanism:advanced_logistcial_transporter'
-local teleporter_id = 'mekanism:teleporter'
+-- only if enable_teleporter
+local a = 'mekanism:teleporter'
 local quantum_porter_id = 'mekanism:quantum_entangloporter'
 local diamond_pickaxe_id = 'minecraft:diamond_pickaxe'
 local ender_wireless_modem_id = 'computercraft:wireless_modem_advanced'
+-- only if no ender wireless modem
 local wireless_modem_id = 'computercraft:wireless_modem_normal'
 
 local function doUntil(c, failed, max)
@@ -144,7 +151,7 @@ local function place()
 	doUntil(turtle.place)
 	doUntil(turtle.turnLeft)
 	if enable_teleporter then
-		if not selectItem(teleporter_id) then
+		if not selectItem(a) then
 			return false, string.format('No item [%s] found', teleporter_id)
 		end
 		doUntil(turtle.placeUp)
@@ -152,10 +159,12 @@ local function place()
 		repeat
 			teleporter = peripheral.wrap('top')
 		until teleporter
-		if not hasFrequency(teleporter, miner_frequency) then
-			teleporter.createFrequency(miner_frequency)
+		if teleporter.getSecurityMode() == 'PUBLIC' then
+			if not hasFrequency(teleporter, miner_frequency) then
+				teleporter.createFrequency(miner_frequency)
+			end
+			teleporter.setFrequency(miner_frequency)
 		end
-		teleporter.setFrequency(miner_frequency)
 	end
 	doUntil(turtle.back)
 	if not selectItem(cable_id) then
@@ -230,6 +239,15 @@ local function placeMinerAndDestroy(modem)
 	end
 	local miner = peripheral.wrap('top')
 	rewrite('Starting...')
+	if miner.getSecurityMode() == 'PUBLIC' then
+		miner.stop()
+		miner.reset()
+		miner.setAutoEject(false)
+		sleep(0.1) -- need refuresh auto eject?
+		miner.setAutoEject(true)
+		miner.setSilkTouch(true)
+		miner.setRadius(32)
+	end
 	miner.start()
 	rewrite('Polling...')
 	sleep(1)
@@ -280,19 +298,23 @@ local function broadcastPos(modem, x, y, z)
 end
 
 local function gpsLocate()
-	return gps.locate(2, debuging)
+	local x, y, z = gps.locate(2, debuging)
+	if x ~= x then -- it's nan
+		return false
+	end
+	return x, y, z
 end
 
 local function _moveAndBroadcast1(modem, n)
 	for i = 1, n do
-		ok, _, err = doUntil(turtle.forward, 3)
+		local ok, _, err = doUntil(turtle.forward, 3)
 		if not ok then
 			print()
 			broadcastProcess(modem, 'error', err or 'Turtle cannot move forward')
 			return false, err
 		end
 		rewrite(string.format('Moved %d blocks...', i))
-		x, y, z = doUntil(gpsLocate)
+		local x, y, z = doUntil(gpsLocate)
 		broadcastPos(modem, x, y, z)
 	end
 end
@@ -301,7 +323,7 @@ local function _moveAndBroadcast2(modem, n)
 	local done = false
 	parallel.waitForAll(function()
 		for i = 1, n do
-			ok, _, err = doUntil(turtle.forward, 3)
+			local ok, _, err = doUntil(turtle.forward, 3)
 			if not ok then
 				print()
 				broadcastProcess(modem, 'error', err or 'Turtle cannot move forward')
@@ -312,7 +334,7 @@ local function _moveAndBroadcast2(modem, n)
 		done = true
 	end, function()
 		repeat
-			x, y, z = doUntil(gpsLocate)
+			local x, y, z = doUntil(gpsLocate)
 			broadcastPos(modem, x, y, z)
 		until done
 	end)
@@ -328,8 +350,42 @@ local function isProtected(protects, x, z, radious)
 	return false
 end
 
+local function refuel()
+	if false then
+		if not equipLeft(end_automata_id) then
+			printError('WARN: no end automata core was found')
+			return shell.run('refuel', 10000)
+		else
+			local tmp_point = 'tmp_point'
+			local core = peripheral.wrap('left')
+			local ok, err = doUntil(function() return pcall(core.savePoint, tmp_point) end, 20)
+			if not ok then
+				printError('Cannot save current point: '..err)
+				return false, err
+			end
+			ok, err = doUntil(function() return pcall(core.warpToPoint, refuel_point) end, 20)
+			if not ok then
+				printError('Cannot warp to point: '..err)
+				return false, err
+			end
+			shell.run('lava_refueler', 'bottom')
+			ok, err = doUntil(function() return pcall(core.warpToPoint, tmp_point) end, 20)
+			if not ok then
+				printError('Cannot warp back to tmp: '..err)
+				return false, err
+			end
+		end
+	else
+		return shell.run('refuel', 10000)
+	end
+end
+
 local function placeAndForward(radious, islaunch)
-	local protect_positions = require('protects')
+	local ok, protect_positions = pcall(require, 'protects')
+	if not ok or not protect_positions then
+		printError('WARN: no protects.lua found')
+		protect_positions = {}
+	end
 	radious = radious or 32
 	local index = 0
 	if islaunch then
@@ -361,6 +417,11 @@ local function placeAndForward(radious, islaunch)
 			if x ~= x0 or y ~= y0 or z ~= z0 then
 				printError('ERROR: position not match')
 				return false, 'position not match, program break'
+			end
+			local fuel = turtle.getFuelLevel()
+			if fuel ~= 'unlimited' and fuel < 10000 then
+				print()
+				refuel()
 			end
 			rewrite('Destorying old miner...')
 			local ok, err = destroy()
@@ -399,7 +460,8 @@ local function placeAndForward(radious, islaunch)
 		sleep(1)
 		local fuel = turtle.getFuelLevel()
 		if fuel ~= 'unlimited' and fuel < 10000 then
-			shell.run('refuel', 10000)
+			print()
+			refuel()
 		end
 
 		if not isProtected(protect_positions, x, z, radious) then
@@ -472,10 +534,12 @@ local subCommands = {
 					teleporter = peripheral.wrap('bottom')
 					sleep(1)
 				until teleporter
-				if not hasFrequency(teleporter, emergency_frequency) then
-					teleporter.createFrequency(emergency_frequency)
+				if teleporter.getSecurityMode() == 'PUBLIC' then
+					if not hasFrequency(teleporter, emergency_frequency) then
+						teleporter.createFrequency(emergency_frequency)
+					end
+					teleporter.setFrequency(emergency_frequency)
 				end
-				teleporter.setFrequency(emergency_frequency)
 			end
 		end
 		return ok

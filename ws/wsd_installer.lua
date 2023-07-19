@@ -89,12 +89,13 @@ local function install()
 		fs.delete('coroutinex.lua')
 	end
 	shell.run('wget '..coxUrl)
-	if fs.exists('wsd.lua') then
-		fs.delete('wsd.lua')
+	if fs.exists('startup.lua') then
+		fs.delete('startup.lua')
 	end
-	shell.run('wget '..wsdUrl)
-	shell.run('wsd install')
-	settings.set('shell.allow_disk_startup', false)
+	shell.run('wget '..wsdUrl..' startup.lua')
+	shell.run('set shell.allow_disk_startup false')
+	print('rebooting...')
+	sleep(1)
 	os.reboot()
 end
 

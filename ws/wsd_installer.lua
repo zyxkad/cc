@@ -83,17 +83,21 @@ local function install()
 			settings.set(name, value)
 		end
 	end
+
 	local coxUrl = 'https://raw.githubusercontent.com/zyxkad/cc/master/coroutinex.lua'
 	local wsdUrl = 'https://raw.githubusercontent.com/zyxkad/cc/master/ws/wsd.lua'
+
 	if fs.exists('coroutinex.lua') then
 		fs.delete('coroutinex.lua')
 	end
-	shell.run('wget '..coxUrl)
+	shell.run('wget '..coxUrl..' coroutinex.lua')
 	if fs.exists('startup.lua') then
 		fs.delete('startup.lua')
 	end
 	shell.run('wget '..wsdUrl..' startup.lua')
-	shell.run('set shell.allow_disk_startup false')
+
+	settings.set('shell.allow_disk_startup', false)
+	settings.save()
 	print('rebooting...')
 	sleep(1)
 	os.reboot()

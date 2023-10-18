@@ -23,6 +23,11 @@ local dictionary = {
 		textColor = colors.orange,
 		ch = 'C',
 	},
+	['#minecraft:block/forge:ores/lapis'] = {
+		value = 2,
+		color = colors.lightBlue,
+		ch = 'L',
+	},
 	['#minecraft:block/forge:ores/iron'] = {
 		value = 2,
 		color = colors.pink,
@@ -241,7 +246,7 @@ function main()
 								else
 									mapwin.setBackgroundColor(colors.black)
 									mapwin.setTextColor(colors.white)
-									mapwin.write((x == 0 and z == 0 and 'X') or ' ')
+									mapwin.write((x == 0 and z == 0 and (d0.y <= 0 and 'X' or 'x')) or ' ')
 								end
 							end
 						end

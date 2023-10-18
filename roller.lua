@@ -259,6 +259,103 @@ local function pool(dx, dz, dy)
 	return true
 end
 
+local function poolUp0(dx, dz, dy)
+	for y = 1, dy do
+		for z = 1, dz, 2 do
+			for x = 2, dx do
+				doUntil(digForwardIfExists)
+			end
+			doUntil(turtle.turnRight)
+			if z + 1 <= dz then
+				doUntil(digForwardIfExists)
+			end
+			doUntil(turtle.turnRight)
+			for x = 2, dx do
+				doUntil(digForwardIfExists)
+			end
+			if z + 2 <= dz then
+				doUntil(turtle.turnLeft)
+				doUntil(digForwardIfExists)
+				doUntil(turtle.turnLeft)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for z = 2, dz do
+			doUntil(digForwardIfExists)
+		end
+		doUntil(turtle.turnRight)
+		if y ~= dy then
+			doUntil(digUpIfExists)
+		end
+	end
+	return true
+end
+
+local function poolUp(dx, dz, dy)
+	-- dig and replace border
+	for y = 1, dy do
+		for x = 1, dx do
+			-- doUntil(turtle.turnLeft)
+			-- doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			-- doUntil(turtle.turnRight)
+			if x ~= dx then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for z = 1, dz do
+			-- doUntil(turtle.turnLeft)
+			-- doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			-- doUntil(turtle.turnRight)
+			if z ~= dz then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for x = 1, dx do
+			-- doUntil(turtle.turnLeft)
+			-- doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			-- doUntil(turtle.turnRight)
+			if x ~= dx then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		for z = 1, dz do
+			-- doUntil(turtle.turnLeft)
+			-- doUntil(function() return replaceBlock(base_blocks) end, function() sleep(0.1) end)
+			-- doUntil(turtle.turnRight)
+			if z ~= dz then
+				doUntil(digForwardIfExists)
+			end
+		end
+		doUntil(turtle.turnRight)
+		if y ~= dy then
+			doUntil(digUpIfExists)
+		end
+	end
+	-- reset position
+	for y = 2, dy do
+		doUntil(digDownIfExists)
+	end
+	-- dig middle
+	if dx > 2 and dz > 2 then
+		doUntil(digForwardIfExists)
+		doUntil(turtle.turnRight)
+		doUntil(digForwardIfExists)
+		doUntil(turtle.turnLeft)
+		local ok, err = poolUp0(dx - 2, dz - 2, dy)
+		if ok then
+			doUntil(turtle.back)
+			doUntil(turtle.turnRight)
+			doUntil(turtle.back)
+			doUntil(turtle.turnLeft)
+		end
+		return ok, err
+	end
+	return true
+end
+
 ---- CLI ----
 
 local subCommands = {
@@ -289,6 +386,18 @@ local subCommands = {
 		local x, z, y = tonumber(arg[i + 1]), tonumber(arg[i + 2]), tonumber(arg[i + 3])
 		return pool0(x, z, y)
 	end,
+	poolUp = function(arg, i)
+		local x, z, y = tonumber(arg[i + 1]), tonumber(arg[i + 2]), tonumber(arg[i + 3])
+		if not digForwardIfExists() then
+			return false, 'Cannot dig forward'
+		end
+		local ok, err = poolUp(x, z, y)
+		if ok then
+			turtle.down()
+			turtle.back()
+		end
+		return ok, err
+	end
 }
 
 subCommands.help = function(arg, i)
@@ -334,4 +443,5 @@ return {
 	railway = railway,
 	pool = pool,
 	pool0 = pool0,
+	poolUp = poolUp,
 }

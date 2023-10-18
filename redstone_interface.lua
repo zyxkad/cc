@@ -47,7 +47,7 @@ function RedstoneInterface:createFromStr(obj, data)
 end
 
 function RedstoneInterface:setOutput(value)
-	assert(type(value) == 'boolean', 'Argument #1(value) must be a boolean')
+	assert(type(value) == 'boolean', 'Argument #1(value) must be a boolean'))
 	return self.int.setOutput(self.side, value)
 end
 

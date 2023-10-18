@@ -63,6 +63,7 @@ do
 		setNilSetting('wsd.host')
 		setNilSetting('wsd.server')
 		setNilSetting('wsd.auth')
+		settings.set('motd.enable', false)
 		settings.save()
 
 		if fs.exists('/startup.lua') then
@@ -85,7 +86,7 @@ do
 	end -- End Installer
 end
 
-
+local wsdPkg = {} -- export package
 
 local crx = require('coroutinex')
 local co_run = crx.run
@@ -102,19 +103,27 @@ local function mustGetSetting(name)
 	return v
 end
 
+local function hadSuffix(str, suffix)
+	return #str > #suffix and str:sub(-#suffix) == suffix
+end
+
+local function removeSuffix(str, suffix)
+	if hadSuffix(str, suffix) then
+		return true, str:sub(1, - #suffix - 1)
+	end
+	return false, str
+end
+
 local SHELL_PATH = settings.get('wsd.shell', 'rom/programs/shell.lua')
 local SERVER = mustGetSetting('wsd.host')
 local HOST = mustGetSetting('wsd.server')
 local AUTH_TOKEN = mustGetSetting('wsd.auth')
+local TERMINATE_MAX_TRY = 10
 
 local ignoreEvents = {
-	-- From coroutinex
-	queue_push = true,
-	queue_pull = true,
-
 	-- From wsd
 	_wsd_reply = true,
-	_yield = true,
+	_wsd_yield = true,
 }
 
 local blockPassingEvents = {
@@ -246,44 +255,21 @@ local function newFakeTerm(id, width, height)
 		running = false
 	end
 
-	local function newOper(name, hasReply)
-		if hasReply then
-			return function(...)
-				checkRunning()
-				local args = {...}
-				if #args == 0 then
-					args = textutils.empty_json_array
-				end
-				local res = ask('term_oper', {
+	local function newOper(name)
+		return function(...)
+			checkRunning()
+			local args = {...}
+			if #args == 0 then
+				args = textutils.empty_json_array
+			end
+			ws.send(textutils.serialiseJSON({
+				type = 'term_oper',
+				data = {
 					term = id,
 					oper = name,
 					args = args,
-				})
-				if res.status ~= 'ok' then
-					error(err, 1)
-				end
-				if res.res then
-					return table.unpack(res.res)
-				else
-					return
-				end
-			end
-		else
-			return function(...)
-				checkRunning()
-				local args = {...}
-				if #args == 0 then
-					args = textutils.empty_json_array
-				end
-				ws.send(textutils.serialiseJSON({
-					type = 'term_oper',
-					data = {
-						term = id,
-						oper = name,
-						args = args,
-					},
-				}))
-			end
+				},
+			}))
 		end
 	end
 
@@ -293,14 +279,14 @@ local function newFakeTerm(id, width, height)
 		clearLine = true,
 	}
 	for n, _ in pairs(noReplyMethods) do
-		fkTerm[n] = newOper(n, false)
+		fkTerm[n] = newOper(n)
 	end
 
 	function fkTerm.getSize()
 		return fkTerm._width, fkTerm._height
 	end
 
-	local _setCursorPos = newOper('setCursorPos', false)
+	local _setCursorPos = newOper('setCursorPos')
 
 	function fkTerm.setCursorPos(x, y)
 		expect(1, x, 'number')
@@ -313,7 +299,7 @@ local function newFakeTerm(id, width, height)
 		return fkTerm._cursorX, fkTerm._cursorY
 	end
 
-	local _setCursorBlink = newOper('setCursorBlink', false)
+	local _setCursorBlink = newOper('setCursorBlink')
 
 	function fkTerm.setCursorBlink(blink)
 		expect(1, blink, 'boolean')
@@ -325,7 +311,7 @@ local function newFakeTerm(id, width, height)
 		return fkTerm._cursorBlink
 	end
 
-	local _setTextColor = newOper('setTextColor', false)
+	local _setTextColor = newOper('setTextColor')
 
 	function fkTerm.setTextColor(color)
 		expect(1, color, 'number')
@@ -339,7 +325,7 @@ local function newFakeTerm(id, width, height)
 	end
 	fkTerm.getTextColour = fkTerm.getTextColor
 
-	local _setBackgroundColor = newOper('setBackgroundColor', false)
+	local _setBackgroundColor = newOper('setBackgroundColor')
 
 	function fkTerm.setBackgroundColor(color)
 		expect(1, color, 'number')
@@ -353,14 +339,14 @@ local function newFakeTerm(id, width, height)
 	end
 	fkTerm.getBackgroundColour = fkTerm.getBackgroundColor
 
-	local _write = newOper('write', false)
+	local _write = newOper('write')
 	function fkTerm.write(text)
 		text = tostring(text)
 		_write(text)
 		fkTerm._cursorX = fkTerm._cursorX + #text
 	end
 
-	local _blit = newOper('blit', false)
+	local _blit = newOper('blit')
 	function fkTerm.blit(text, color, bgColor)
 		expect(1, text, 'string')
 		expect(2, color, 'string')
@@ -378,7 +364,7 @@ local function newFakeTerm(id, width, height)
 	end
 	fkTerm.isColour = fkTerm.isColor
 
-	local _setPaletteColor = newOper('setPaletteColor', false)
+	local _setPaletteColor = newOper('setPaletteColor')
 
 	function fkTerm.setPaletteColor(color, r, g, b)
 		expect(1, color, 'number')
@@ -443,6 +429,8 @@ local function tryConnect()
 	end
 end
 
+---- BEGIN programs ----
+
 local programs = {}
 
 local function create_program(tid, path, args, width, height)
@@ -459,7 +447,7 @@ local function create_program(tid, path, args, width, height)
 		prog.queuedEvents[#prog.queuedEvents + 1] = {
 			event, ...,
 		}
-		os.queueEvent('_yield')
+		os.queueEvent('_wsd_yield')
 	end
 	local progTerm = newFakeTerm(tid, width, height)
 	local env = { shell = shell, multishell = multishell }
@@ -475,43 +463,75 @@ local function create_program(tid, path, args, width, height)
 		programs[tid] = nil
 		reply(tid, ok)
 	end)
-
-	os.queueEvent('_yield')
 	return prog
 end
 
-local function programRunner()
-	local eventFilter = {}
-	local eventData = {}
-	local function resume_program(i, prog, eventData)
-		if eventFilter[prog] == nil or eventFilter[prog] == eventData[1] then
-			eventFilter[prog] = nil
-			oldTerm = term.redirect(prog.term)
-			local ok, data = coroutine.resume(prog.thr, table.unpack(eventData))
+local function kill_program(prog)
+	local isdead = false
+	oldTerm = term.redirect(prog.term)
+	for i = 1, TERMINATE_MAX_TRY do
+		local ok, err = coroutine.resume(prog.thr, 'terminate')
+		if not ok then
 			prog.term = term.redirect(oldTerm)
 			oldTerm = nil
-			if not ok then
-				error(data, 0)
-			end
-			if coroutine.status(prog.thr) == 'dead' then
-				programs[i] = nil
-				return false
-			elseif type(data) == 'string' then
-				eventFilter[prog] = data
-			end
-		else -- put event back to the queue
-			prog.queuedEvents[#prog.queuedEvents + 1] = eventData
+			error(err, 1)
 		end
+		if coroutine.status(prog.thr) == 'dead' then
+			isdead = true
+			break
+		end
+	end
+	prog.term = term.redirect(oldTerm)
+	oldTerm = nil
+	return isdead
+end
+
+local function resume_program(prog, eventData)
+	local eventType = eventData[1]
+	if eventType == 'kill' then
+		kill_program(prog)
+		return false
+	end
+	if eventType == '_wsd_yield' then
 		return true
 	end
+	if prog.eventFilter == nil or prog.eventFilter == eventType then
+		prog.eventFilter = nil
+		oldTerm = term.redirect(prog.term)
+		local ok, data = coroutine.resume(prog.thr, table.unpack(eventData))
+		prog.term = term.redirect(oldTerm)
+		oldTerm = nil
+		if not ok then
+			error(data, 1)
+		end
+		if coroutine.status(prog.thr) == 'dead' then
+			return false
+		end
+		if type(data) == 'string' then
+			prog.eventFilter = data
+		end
+	end
+	return true
+end
+
+local function programRunner()
+	-- global: oldTerm
+	local eventData = {}
 	while true do
 		for i, prog in pairs(programs) do
-			if resume_program(i, prog, eventData) and #prog.queuedEvents > 0 then
+			local ok = resume_program(prog, eventData)
+			if ok and #prog.queuedEvents > 0 then
 				local events = prog.queuedEvents
 				prog.queuedEvents = {}
 				for _, edata in ipairs(events) do
-					resume_program(i, prog, edata)
+					ok = resume_program(prog, edata)
+					if not ok then
+						break
+					end
 				end
+			end
+			if not ok then
+				programs[i] = nil
 			end
 		end
 		local flag
@@ -526,13 +546,117 @@ local function programRunner()
 	end
 end
 
+---- AFTER programs ----
+
+---- BEGIN service ----
+
+local services = {}
+
+local function create_service(sid, path)
+	expect(1, sid, 'string')
+	expect(2, path, 'string')
+	local svs = {
+		queuedEvents = {},
+	}
+	if services[sid] then
+		error(string.format('Service [%s] already exists', sid), 2)
+	end
+	services[sid] = svs
+	function svs.queueEvent(event, ...)
+		svs.queuedEvents[#svs.queuedEvents + 1] = {
+			event, ...,
+		}
+		os.queueEvent('_wsd_yield')
+	end
+	local cterm = term.current()
+	local width, height = cterm.getSize()
+	local svsTerm = window.create(cterm, 1, 2, width, height, false)
+	local env = { shell = shell, multishell = multishell, wsd = wsdPkg }
+	svs.term = svsTerm
+	svs.thr = coroutine.create(function()
+		local ok = os.run(env, path)
+		svsTerm.close()
+		services[sid] = nil
+		if not ok then
+			print(string.format('Service [%s] exited unexpectedly', sid))
+		end
+	end)
+	return svs
+end
+
+local function serviceRunner()
+	-- global: services
+	local eventData = {}
+	while true do
+		for i, prog in pairs(services) do
+			local ok = resume_program(prog, eventData)
+			if ok and #prog.queuedEvents > 0 then
+				local events = prog.queuedEvents
+				prog.queuedEvents = {}
+				for _, edata in ipairs(events) do
+					ok = resume_program(prog, edata)
+					if not ok then
+						break
+					end
+				end
+			end
+			if not ok then
+				services[i] = nil
+			end
+		end
+		local flag
+		repeat
+			flag = true
+			eventData = {os.pullEvent()}
+			local eventTyp = eventData[1]
+			if blockPassingEvents[eventTyp] then
+				flag = false
+			end
+		until flag
+	end
+end
+
+local function loadServices()
+	-- global: services
+	if fs.isDir('/services') then
+		local list = fs.list('/services')
+		for _, name in ipairs(list) do
+			local path = fs.combine('/services', name)
+			if fs.isDir(path) then
+				path = fs.combine(path, 'init.lua')
+				if fs.exists(path) and not fs.isDir(path) then
+					create_service(name, path)
+					print(string.format('Loading service: [%s]', name))
+				end
+			else
+				local isLua, sid = removeSuffix(name, '.lua')
+				if isLua then
+					create_service(sid, path)
+					print(string.format('Loading service: [%s]', sid))
+				end
+			end
+		end
+	end
+end
+
+---- AFTER service ----
+
 local function _keyProcessor(code, ...)
 	return keys[code], ...
+end
+
+local function newRemoteFileReader(fid)
+	local file = {}
+	-- TODO
+	return file
 end
 
 local eventPreProcessors = {
 	key = _keyProcessor,
 	key_up = _keyProcessor,
+	file_transfer = function(flist)
+		return
+	end,
 }
 
 local function listenWs()
@@ -587,7 +711,7 @@ local function listenWs()
 		end,
 		run = function(msg)
 			local id = msg.id
-			print('Creating program:', msg.data.prog)
+			-- print('Creating program:', msg.data.prog)
 			local path = shell.resolveProgram(msg.data.prog)
 			local args = msg.data.args or {}
 			local width, height = msg.data.width, msg.data.height
@@ -596,6 +720,7 @@ local function listenWs()
 				return
 			end
 			create_program(id, path, args, width, height)
+			os.queueEvent('_wsd_yield')
 		end,
 		term_event = function(msg)
 			local tid = msg.term
@@ -610,7 +735,16 @@ local function listenWs()
 					prog.queueEvent(event, table.unpack(args))
 				end
 			end
-		end
+		end,
+		service_event = function(msg)
+			local sid = msg.service
+			local event = msg.event
+			local args = msg.args or {}
+			local serv = services[sid]
+			if serv then
+				serv.queueEvent(event, table.unpack(args))
+			end
+		end,
 	}
 	while true do
 		local data, bin = ws.receive()
@@ -658,6 +792,7 @@ end
 
 local function main()
 	local reconnect
+	loadServices()
 	repeat
 		ws = nil
 		co_main(tryConnect, {
@@ -666,7 +801,7 @@ local function main()
 				return settings.get('wsd.terminate', true)
 			end
 		})
-		reconnect = co_main(listenWs, listenEvent, programRunner, {
+		reconnect = co_main(listenWs, listenEvent, serviceRunner, programRunner, {
 			event = 'terminate',
 			callback = function()
 				if settings.get('wsd.terminate', true) then

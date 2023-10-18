@@ -24,10 +24,12 @@ end
 
 local function bud()
 	while true do
-		local ok, data = turtle.inspect()
-		if ok then
-			if data.name == quartz_cluster_id then
-				turtle.dig()
+		if not redstone.getInput('back') then
+			local ok, data = turtle.inspect()
+			if ok then
+				if data.name == quartz_cluster_id then
+					turtle.dig()
+				end
 			end
 		end
 		sleep(0)

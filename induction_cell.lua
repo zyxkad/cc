@@ -7,7 +7,7 @@ end
 
 chatbox = peripheral.find('chatBox')
 assert(chatbox, 'Cannot find chat box')
-cell = peripheral.wrap('bottom')
+cell = peripheral.find('inductionPort')
 assert(cell, 'Cannot find induction cell')
 
 msgPrompt = 'CK Induction Cell'

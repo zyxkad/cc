@@ -2,6 +2,9 @@
 -- by zyxkad@gmail.com
 
 local dictionary = {
+	['#minecraft:block/forge:ores/certus_quartz'] = {
+		value = -1,
+	},
 	['#minecraft:block/forge:dirt'] = {
 		color = colors.brown,
 	},
@@ -28,9 +31,39 @@ local dictionary = {
 		color = colors.lightBlue,
 		ch = 'L',
 	},
+	['#minecraft:block/forge:ores/zinc'] = {
+		value = 2,
+		textColor = colors.lime,
+		ch = 'Z',
+	},
+	['#minecraft:block/forge:ores/tin'] = {
+		value = 2,
+		color = colors.lightBlue,
+		ch = 'T',
+	},
+	['#minecraft:block/forge:ores/sulfur'] = {
+		value = 2,
+		textColor = colors.green,
+		ch = 'S',
+	},
+	['#minecraft:block/forge:ores/nickel'] = {
+		value = 2,
+		textColor = colors.yellow,
+		ch = 'N',
+	},
+	['#minecraft:block/forge:ores/lead'] = {
+		value = 2,
+		textColor = colors.black,
+		ch = 'L',
+	},
 	['#minecraft:block/forge:ores/iron'] = {
 		value = 2,
 		color = colors.pink,
+	},
+	['#minecraft:block/forge:ores/silver'] = {
+		value = 2,
+		textColor = colors.black,
+		ch = 'S',
 	},
 	['#minecraft:block/forge:ores/gold'] = {
 		value = 3,
@@ -44,9 +77,16 @@ local dictionary = {
 		value = 3,
 		color = colors.lime,
 	},
+	['#minecraft:block/forge:ores/osmium'] = {
+		value = 3,
+		color = colors.lime,
+		ch = 'O',
+	},
 	['#minecraft:block/forge:ores/diamond'] = {
 		value = 4,
 		color = colors.lightBlue,
+		textColor = colors.blue,
+		ch = 'O'
 	},
 	['#minecraft:block/forge:ores/netherite_scrap'] = {
 		value = 8,
@@ -246,7 +286,7 @@ function main()
 								else
 									mapwin.setBackgroundColor(colors.black)
 									mapwin.setTextColor(colors.white)
-									mapwin.write((x == 0 and z == 0 and (d0.y <= 0 and 'X' or 'x')) or ' ')
+									mapwin.write((x == 0 and z == 0 and (d0 and d0.y <= 0 and 'X' or 'x')) or ' ')
 								end
 							end
 						end

@@ -1,6 +1,17 @@
--- aes encrypt API
+-- AES encrypt API
+-- An AES key must be 16, 24, or 32 bytes
+-- An AES key file must starts with ====AES KEY FILE====, followed by hex encoded bytes on the next line
 -- translate by zyxkad@gmail.com
 -- original code is from golang.org standard library "crypto/aes"
+--
+-- Dependencies:
+--   crc32.lua
+--
+-- Commands to generate id.aes:
+--   Shell:
+--     echo ====AES KEY FILE==== >id.aes; tr -cd "0-9a-f" </dev/urandom | head -c 64 >>id.aes
+--   Python:
+--     import os;fd=open('id.aes','w');fd.write('====AES KEY FILE====\n'+os.urandom(32).hex());fd.close()
 
 if not bit then
 	error("bit API not found", 2)
@@ -532,7 +543,16 @@ local function generateVec(rand)
 end
 
 local DEFAULT_KEY_FILE = 'id.aes'
-local AES_KEY_FILE_HEADER = 'AES KEY FILE'
+local AES_KEY_FILE_HEADER = '====AES KEY FILE===='
+
+local hexMap = {}
+for i = 0, 255 do
+	hexMap[string.format('%02x', i)] = string.char(i)
+end
+
+local function hexToBytes(s)
+	return s:gsub("(..)", hexMap)
+end
 
 local function saveKey(key, file, cover)
 	local kl = string.len(key)
@@ -562,11 +582,11 @@ local function loadKey(file)
 	if not head or head ~= AES_KEY_FILE_HEADER then
 		return nil, 'Not an AES key file'
 	end
-	local key = fd:read('*all')
+	local key = hexToBytes(fd:read('*all'))
 	fd:close()
 	local kl = string.len(key)
 	if kl ~= 16 and kl ~= 24 and kl ~= 32 then
-		return nil, 'Not an AES key len'
+		return nil, 'Not an AES key len '..kl
 	end
 	return key
 end
@@ -618,27 +638,31 @@ function CipherStream:new(o, cipher)
 end
 
 function CipherStream:encryptInts(src)
-	error("Not implemented", 1)
+	error("Not implemented")
 end
 
 function CipherStream:decryptInts(src)
-	error("Not implemented", 1)
+	error("Not implemented")
 end
 
 function CipherStream:encrypt(src)
 	local leng = #src
 	local crcd = crc32.sumIEEE(src)
 	local s = str2ints(fitTo16x(src))
-	return ints2str(self:encryptInts({leng, 0, crcd, 0, table.unpack(s)}))
+	return ints2str(self:encryptInts({leng, 0, crcd, math.random() * 0xffffffff, table.unpack(s)}))
 end
 
 function CipherStream:decrypt(src)
 	assert(#src % 16 == 0)
 	local res = self:decryptInts(str2ints(src))
 	local leng, crcd = res[1], res[3]
-	assert(res[2] == 0 and res[4] == 0, 'head reserve zero bytes assert failed')
+	if res[2] ~= 0 then
+		return nil, 'header reserved zero byte assert failed '..res[2]
+	end
 	res = string.sub(ints2str({table.unpack(res, 5)}), 0, leng)
-	assert(crcd == crc32.sumIEEE(res), 'crc32 check failed')
+	if crcd ~= crc32.sumIEEE(res) then
+		return nil, 'crc32 check failed'
+	end
 	return res
 end
 
@@ -772,11 +796,42 @@ function OFBStream:decryptInts(src)
 	return res
 end
 
+local function encrypt(key, src)
+	assert(type(src) == 'string', 'src must be a string')
+	local c = ECBStream:new(nil, Cipher:new(nil, key))
+	local s = ''
+	for i = 1, #src, 15 do
+		s = s..src:sub(i, i + 14)..string.char(math.random() * 0xff)
+	end
+	return c:encrypt(s)
+end
+
+local function decrypt(key, src)
+	if #src % 16 ~= 0 then
+		return nil, 'Src length is not 16n.'
+	end
+	local c = ECBStream:new(nil, Cipher:new(nil, key))
+	local d, err = c:decrypt(src)
+	if not d then
+		return nil, err
+	end
+	d = d:sub(1, -2)
+	local s = ''
+	for i = 1, #d, 16 do
+		s = s..d:sub(i, i + 14)
+	end
+	return s
+end
+
 return {
+	DEFAULT_KEY_FILE = DEFAULT_KEY_FILE,
+	AES_KEY_FILE_HEADER = AES_KEY_FILE_HEADER,
 	generateKey = generateKey,
 	generateVec = generateVec,
 	saveKey = saveKey,
 	loadKey = loadKey,
+	encrypt = encrypt,
+	decrypt = decrypt,
 	Cipher = Cipher,
 	CipherStream = CipherStream,
 	ECBStream = ECBStream,

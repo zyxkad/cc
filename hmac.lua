@@ -1,5 +1,8 @@
 -- hmac API ?
 -- by zyxkad@gmail.com
+-- Dependencies:
+--   aes.lua
+--   crc32.lua
 
 local crc32 = crc32
 if not crc32 then
@@ -16,8 +19,6 @@ if not aes then
 		error("aes API not found", 3)
 	end
 end
-
-local DEFAULT_KEY_FILE = 'id.aes'
 
 local function fitTo16x(src)
 	local ri = #src % 16

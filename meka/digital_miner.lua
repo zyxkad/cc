@@ -8,9 +8,11 @@ if not turtle then
 	error('turtle API not found')
 end
 
+-- BEGIN configs
 local debuging = false
 local enable_teleporter = true
 -- local lava_quantum_nbt = 
+-- ENG configs
 
 local turtleLabel = os.getComputerLabel()
 if not turtleLabel then
@@ -24,7 +26,7 @@ local cable_id = 'mekanism:advanced_universal_cable'
 -- not using yet
 local transporter_id = 'mekanism:advanced_logistcial_transporter'
 -- only if enable_teleporter
-local a = 'mekanism:teleporter'
+local teleporter_id = 'mekanism:teleporter'
 local quantum_porter_id = 'mekanism:quantum_entangloporter'
 local diamond_pickaxe_id = 'minecraft:diamond_pickaxe'
 local ender_wireless_modem_id = 'computercraft:wireless_modem_advanced'
@@ -151,7 +153,7 @@ local function place()
 	doUntil(turtle.place)
 	doUntil(turtle.turnLeft)
 	if enable_teleporter then
-		if not selectItem(a) then
+		if not selectItem(teleporter_id) then
 			return false, string.format('No item [%s] found', teleporter_id)
 		end
 		doUntil(turtle.placeUp)

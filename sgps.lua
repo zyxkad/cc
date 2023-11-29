@@ -1,3 +1,10 @@
+-- Security Global Position System
+-- when hosting, sgps will encrypt the position with the aes key
+-- when locating, sgps will only accept encrypted messages
+-- improved by zyxkad@gmail.com, original codes are from computer craft team's gps program
+--
+-- Dependencies:
+--   aes.lua
 
 local moduleName = ...
 local isProgram = not moduleName or moduleName ~= 'sgps'
@@ -14,20 +21,11 @@ end
 
 local global_aes_key, err = aes.loadKey()
 if not global_aes_key then
-	global_aes_key = string.rep(' ', 16)
-	-- error('Cannot load global aes key: ' .. err)
-end
-
-local hmac = hmac
-if not hmac then
-	hmac = require('hmac')
-	if not hmac then
-		error('hmac API not found')
-	end
+	error('Cannot load global aes key: ' .. err .. '\nPlease generate 16/24/32 random bytes to id.aes')
 end
 
 --- The channel which GPS requests and responses are broadcast on.
-local CHANNEL_GPS = 65534
+local CHANNEL_GPS = 65504
 
 local function trilaterate(A, B, C)
 	local a2b = B.vPosition - A.vPosition
@@ -83,7 +81,7 @@ local function narrow(p1, p2, fix)
 end
 
 local function getSecond()
-	return math.floor(os.epoch() / 100000)
+	return math.floor(os.epoch() / 1000) / 100
 end
 
 local function locate(_nTimeout, _bDebug)
@@ -123,7 +121,11 @@ local function locate(_nTimeout, _bDebug)
 	end
 
 	-- Send a ping to listening GPS hosts
-	modem.transmit(CHANNEL_GPS, CHANNEL_GPS, "PING")
+	local rn = math.floor(math.random() * 0xffffffff) -- random id
+	modem.transmit(CHANNEL_GPS, CHANNEL_GPS, aes.encrypt(global_aes_key, textutils.serialiseJSON({
+		op = "PING",
+		rn = rn,
+	})))
 
 	-- Wait for the responses
 	local tFixes = {}
@@ -133,33 +135,36 @@ local function locate(_nTimeout, _bDebug)
 		local e, p1, p2, p3, p4, p5 = os.pullEvent()
 		if e == "modem_message" then
 			-- We received a reply from a modem
-			local sSide, sChannel, sReplyChannel, tMessage, nDistance = p1, p2, p3, p4, p5
+			local sSide, sChannel, sReplyChannel, sCyMessage, nDistance = p1, p2, p3, p4, p5
+			-- Received the correct message from the correct modem: use it to determine position
 			if sSide == sModemSide and sChannel == CHANNEL_GPS and sReplyChannel == CHANNEL_GPS and nDistance then
-				-- Received the correct message from the correct modem: use it to determine position
-				if type(tMessage) == "table" and #tMessage == 3 and tonumber(tMessage[1]) and tonumber(tMessage[2]) and tonumber(tMessage[3]) and
-						tonumber(tMessage.exp) and tMessage.exp > getSecond() and tMessage.hmac == hmac.signCrc32(
-							global_aes_key,
-							{ exp = tMessage.exp, sub = "GPS" },
-							{table.unpack(tMessage)}
-						) then
-					local tFix = { vPosition = vector.new(tMessage[1], tMessage[2], tMessage[3]), nDistance = nDistance }
+				local sMessage, err = aes.decrypt(global_aes_key, sCyMessage)
+				if not sMessage then
 					if _bDebug then
-						print(tFix.nDistance .. " metres from " .. tostring(tFix.vPosition))
+						print('Could not decrypt gps result:', err)
 					end
-					if tFix.nDistance == 0 then
-						pos1, pos2 = tFix.vPosition, nil
-					else
-						table.insert(tFixes, tFix)
-						if #tFixes >= 3 then
-							if not pos1 then
-								pos1, pos2 = trilaterate(tFixes[1], tFixes[2], tFixes[#tFixes])
-							else
-								pos1, pos2 = narrow(pos1, pos2, tFixes[#tFixes])
+				else
+					local tMessage = textutils.unserialiseJSON(sMessage)
+					if type(tMessage) == "table" and tMessage.op == "REPLY" and tMessage.rn == rn and tMessage.exp > getSecond() then
+						local tFix = { vPosition = vector.new(tMessage.x, tMessage.y, tMessage.z), nDistance = nDistance }
+						if _bDebug then
+							print(tFix.nDistance .. " metres from " .. tostring(tFix.vPosition))
+						end
+						if tFix.nDistance == 0 then
+							pos1, pos2 = tFix.vPosition, nil
+						else
+							table.insert(tFixes, tFix)
+							if #tFixes >= 3 then
+								if not pos1 then
+									pos1, pos2 = trilaterate(tFixes[1], tFixes[2], tFixes[#tFixes])
+								else
+									pos1, pos2 = narrow(pos1, pos2, tFixes[#tFixes])
+								end
 							end
 						end
-					end
-					if pos1 and not pos2 then
-						break
+						if pos1 and not pos2 then
+							break
+						end
 					end
 				end
 			end
@@ -197,18 +202,21 @@ local function locate(_nTimeout, _bDebug)
 	return nil
 end
 
-local function host(x, y, z)
+local function host(x, y, z, modemSide)
 	print(string.format("Position is %d, %d, %d", x, y, z))
 
-	local modemSide = nil
-	for _, v in ipairs(peripheral.getNames()) do
-		if peripheral.getType(v) == 'modem' then
-			modemSide = v
-			break
-		end
-	end
 	if not modemSide then
-		error("No modem found on the computer, require 1")
+		for _, v in ipairs(peripheral.getNames()) do
+			if peripheral.getType(v) == 'modem' then
+				modemSide = v
+				break
+			end
+		end
+		if not modemSide then
+			error("No modem found on the computer, require 1")
+		end
+	elseif peripheral.getType(modemSide) ~= 'modem' then
+		error("Peripheral " .. modemSide .. " is not a modem")
 	end
 	local modem = peripheral.wrap(modemSide)
 	print("Opening channel on modem", modemSide)
@@ -217,19 +225,25 @@ local function host(x, y, z)
 	local nServed = 0
 	local _, print_y = term.getCursorPos()
 	while true do
-		local _, side, schan, rechan, msg, distance = os.pullEvent('modem_message')
-		if side == modemSide and schan == CHANNEL_GPS and msg == 'PING' then
-			local exp = getSecond() + 3
-			local h = hmac.signCrc32(
-				global_aes_key,
-				{ exp = exp, sub = "GPS" },
-				{x, y, z}
-			)
-			modem.transmit(rechan, CHANNEL_GPS, {x, y, z, exp=exp, hmac=h})
+		local _, side, schan, rechan, enmsg, distance = os.pullEvent('modem_message')
+		if side == modemSide and schan == CHANNEL_GPS and distance then
+			local smsg, err = aes.decrypt(global_aes_key, enmsg)
+			if smsg then
+				local msg = textutils.unserialiseJSON(smsg)
+				if type(msg) == 'table' and msg.op == 'PING' then
+					local rn = msg.rn
+					local exp = getSecond() + 3
+					modem.transmit(rechan, CHANNEL_GPS, aes.encrypt(global_aes_key, textutils.serialiseJSON({
+						op='REPLY',
+						x=x, y=y, z=z,
+						exp=exp, rn=rn
+					})))
 
-			nServed = nServed + 1
-			term.setCursorPos(1, print_y)
-			print(nServed .. ' GPS requests served')
+					nServed = nServed + 1
+					term.setCursorPos(1, print_y)
+					print(nServed .. ' GPS requests served')
+				end
+			end
 		end
 	end
 end
@@ -243,7 +257,7 @@ local subCommands = {
 	end,
 	host = function(arg, i)
 		local x, y, z = tonumber(arg[i + 1]), tonumber(arg[i + 2]), tonumber(arg[i + 3])
-		host(x, y, z)
+		host(x, y, z, arg[i + 4])
 		return true
 	end
 }
@@ -254,6 +268,7 @@ subCommands.help = function(arg, i)
 	for c, _ in pairs(subCommands) do
 		print('-', c)
 	end
+	print('sgps host <x> <y> <z> [<modem>]')
 end
 
 local function main(arg)

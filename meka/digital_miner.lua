@@ -1,5 +1,9 @@
 -- Digital miner
 -- by zyxkad@gmail.com
+--
+-- Dependencies:
+--   aes.lua
+--   sgps.lua
 
 -- startup command:
 -- shell.run('digital_miner.lua', 'placeAndForward', 'launch')
@@ -10,6 +14,7 @@ end
 
 -- BEGIN configs
 local debuging = false
+local use_security_gps = true
 local enable_teleporter = true
 -- local lava_quantum_nbt = 
 -- ENG configs
@@ -17,6 +22,13 @@ local enable_teleporter = true
 local turtleLabel = os.getComputerLabel()
 if not turtleLabel then
 	error('Please use `label set <label>` give the miner a name')
+end
+
+local aes = require('aes')
+
+local sgps = gps
+if use_security_gps then
+	sgps = require('sgps')
 end
 
 local miner_frequency = turtleLabel
@@ -222,12 +234,14 @@ end
 local function broadcastProcess(modem, typ, data)
 	rednet.open(peripheral.getName(modem))
 	local monitors = {rednet.lookup('miner_monitor')}
+	local d = aes.encrypt(global_aes_key, textutils.serialiseJSON({
+		id = miner_frequency,
+		typ = typ,
+		data = data,
+		exp = math.floor(os.epoch() / 1000) + 3,
+	}))
 	for _, m in ipairs(monitors) do
-		rednet.send(m, {
-			id = miner_frequency,
-			typ = typ,
-			data = data,
-		}, 'digital_miner')
+		rednet.send(m, d, 'digital_miner')
 	end
 	rednet.close(peripheral.getName(modem))
 end
@@ -288,23 +302,25 @@ local cached_stat_path = 'stat.txt'
 local function broadcastPos(modem, x, y, z)
 	rednet.open(peripheral.getName(modem))
 	local monitors = {rednet.lookup('miner_monitor')}
+	local d = aes.encrypt(global_aes_key, textutils.serialiseJSON({
+		id = miner_frequency,
+		typ = 'pos',
+		x = x, y = y, z = z,
+		fuel = turtle.getFuelLevel(),
+		exp = math.floor(os.epoch() / 1000) + 3,
+	}))
 	for _, m in ipairs(monitors) do
-		rednet.send(m, {
-			id = miner_frequency,
-			typ = 'pos',
-			x = x, y = y, z = z,
-			fuel = turtle.getFuelLevel(),
-		}, 'digital_miner')
+		rednet.send(m, d, 'digital_miner')
 	end
 	rednet.close(peripheral.getName(modem))
 end
 
 local function gpsLocate()
-	local x, y, z = gps.locate(2, debuging)
+	local x, y, z = sgps.locate(2, debuging)
 	if x ~= x then -- it's nan
 		return false
 	end
-	return x, y, z
+	return math.floor(x), math.floor(y), math.floor(z)
 end
 
 local function _moveAndBroadcast1(modem, n)

@@ -1,8 +1,14 @@
 -- Digital miner monitor
 -- by zyxkad@gmail.com
+--
+-- Dependencies:
+--   aes.lua
 
-if not parallel then
-	error('Need parallel API')
+local aes = require('aes')
+
+local global_aes_key, err = aes.loadKey()
+if not global_aes_key then
+	error('Cannot load global aes key: ' .. err .. '\nPlease generate 16/24/32 random bytes to id.aes')
 end
 
 local DATA_OFFSET = 3
@@ -59,57 +65,66 @@ local function termUpdateAtCenter(t, y, str)
 end
 
 local function listenData()
-	while true do
-		local id, msg = rednet.receive('digital_miner')
-		local l = datas[msg.id]
-		if not l or l.i == id then
-			local d = datas[msg.id]
-			if msg.typ == 'pos' then
-				if msg.x == msg.x then -- check not be nan
-					if d then
-						d.t = getTime()
-						d.x = msg.x
-						d.y = msg.y
-						d.z = msg.z
-						d.fuel = msg.fuel
-					else
-						d = {
-							t = getTime(),
-							i = id,
-							id = msg.id,
-							x = msg.x,
-							y = msg.y,
-							z = msg.z,
-							fuel = msg.fuel,
-							msg = 'unknown',
-						}
-						datas[msg.id] = d
-					end
-				end
-			elseif msg.typ == 'mining' then
+	local id, enmsg = rednet.receive('digital_miner')
+	local smsg = aes.decrypt(global_aes_key, enmsg)
+	if not smsg then
+		return
+	end
+	local msg = textutils.unserialiseJSON(smsg)
+	if type(msg) ~= 'table' then
+		return
+	end
+	if msg.exp > math.floor(os.epoch() / 1000) then
+		return
+	end
+	local l = datas[msg.id]
+	if not l or l.i == id then
+		local d = datas[msg.id]
+		if msg.typ == 'pos' then
+			if msg.x == msg.x then -- check not be nan
 				if d then
 					d.t = getTime()
-					d.msg = string.format('remain=%d', msg.data)
-				end
-			elseif msg.typ == 'error' then
-				if d then
-					printError('ERR:', msg.data)
-					d.msg = string.format('err=%s', msg.data)
-				end
-			else
-				if d then
-					d.msg = msg.data and string.format('%s: %s', msg.typ, msg.data) or msg.typ
+					d.x = msg.x
+					d.y = msg.y
+					d.z = msg.z
+					d.fuel = msg.fuel
+				else
+					d = {
+						t = getTime(),
+						i = id,
+						id = msg.id,
+						x = msg.x,
+						y = msg.y,
+						z = msg.z,
+						fuel = msg.fuel,
+						msg = 'unknown',
+					}
+					datas[msg.id] = d
 				end
 			end
+		elseif msg.typ == 'mining' then
 			if d then
-				local path = string.format('last_pos/%s.data', msg.id)
-				local fd, err = io.open(path, 'w')
-				if fd then
-					fd:write(textutils.serialiseJSON(d))
-					fd:close()
-				else
-					printError('Cannot write to file :', path, ':', err)
-				end
+				d.t = getTime()
+				d.msg = string.format('remain=%d', msg.data)
+			end
+		elseif msg.typ == 'error' then
+			if d then
+				printError('ERR:', msg.data)
+				d.msg = string.format('err=%s', msg.data)
+			end
+		else
+			if d then
+				d.msg = msg.data and string.format('%s: %s', msg.typ, msg.data) or msg.typ
+			end
+		end
+		if d then
+			local path = string.format('last_pos/%s.data', msg.id)
+			local fd, err = io.open(path, 'w')
+			if fd then
+				fd:write(textutils.serialiseJSON(d))
+				fd:close()
+			else
+				printError('Cannot write to file :', path, ':', err)
 			end
 		end
 	end
@@ -137,19 +152,24 @@ local function renderData(monitor)
 end
 
 local function loadData()
-	for _, f in ipairs(fs.list('last_pos')) do
-		local fd = io.open('last_pos'..'/'..f)
-		if fd then
-			local con = fd:read('a')
-			if con then
-				local d = textutils.unserialiseJSON(con)
-				if d then
-					d.msg = d.msg and 'o='..d.msg or 'offline'
-					datas[d.id] = d
-					print('loaded:', d.id)
+	if fs.exists('last_pos') then
+		for _, f in ipairs(fs.list('last_pos')) do
+			local fd = io.open('last_pos'..'/'..f)
+			if fd then
+				local con = fd:read('a')
+				if con then
+					local d = textutils.unserialiseJSON(con)
+					if d then
+						d.msg = d.msg and 'o='..d.msg or 'offline'
+						datas[d.id] = d
+						print('loaded:', d.id)
+					end
 				end
 			end
 		end
+	else
+		print('last_pos not exists, creating one')
+		fs.makeDir('last_pos')
 	end
 end
 
@@ -173,13 +193,17 @@ function main(args)
 	monitor.clear()
 	monitor.setCursorPos(1, 1)
 
-	peripheral.find('modem', rednet.open)
+	peripheral.find('modem', function(m)
+		return peripheral.call(m, 'isWireless') and rednet.open(m)
+	end)
 	rednet.host('miner_monitor', string.format('miner_monitor_%d', os.computerID()))
 
 	loadData()
 
 	parallel.waitForAny(function()
-		listenData()
+		while true do
+			listenData()
+		end
 	end, function()
 		while true do
 			renderData(monitor)

@@ -25,7 +25,7 @@ The Digital Miner System allows you to place and move mekanism digital miner aut
 ## Setup
 
 1. Generate your `id.aes`, use the suggest commands at the top of `aes.lua` 
-2. Makesure your did setup a Security GPS
+2. Makesure your did setup [Security GPS](../sgps.lua)
 
 ### Base Side
 

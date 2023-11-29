@@ -66,15 +66,16 @@ end
 
 local function listenData()
 	local id, enmsg = rednet.receive('digital_miner')
-	local smsg = aes.decrypt(global_aes_key, enmsg)
+	local smsg, err = aes.decrypt(global_aes_key, enmsg)
 	if not smsg then
+		printError('Cannot decrypt:', err)
 		return
 	end
 	local msg = textutils.unserialiseJSON(smsg)
 	if type(msg) ~= 'table' then
 		return
 	end
-	if msg.exp > math.floor(os.epoch() / 1000) then
+	if msg.exp < math.floor(os.epoch() / 1000) then
 		return
 	end
 	local l = datas[msg.id]

@@ -31,6 +31,11 @@ if use_security_gps then
 	sgps = require('sgps')
 end
 
+local global_aes_key, err = aes.loadKey()
+if not global_aes_key then
+	error('Cannot load global aes key: ' .. err .. '\nPlease generate 16/24/32 random bytes to id.aes')
+end
+
 local miner_frequency = turtleLabel
 local emergency_frequency = turtleLabel..'_E'
 local digital_miner_id = 'mekanism:digital_miner'
@@ -317,7 +322,7 @@ end
 
 local function gpsLocate()
 	local x, y, z = sgps.locate(2, debuging)
-	if x ~= x then -- it's nan
+	if not x or x ~= x then -- it's nan
 		return false
 	end
 	return math.floor(x), math.floor(y), math.floor(z)

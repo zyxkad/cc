@@ -797,16 +797,19 @@ function OFBStream:decryptInts(src)
 end
 
 local function encrypt(key, src)
+	assert(key)
 	assert(type(src) == 'string', 'src must be a string')
 	local c = ECBStream:new(nil, Cipher:new(nil, key))
 	local s = ''
 	for i = 1, #src, 15 do
-		s = s..src:sub(i, i + 14)..string.char(math.random() * 0xff)
+		s = s..string.char(math.random() * 0xff)..src:sub(i, i + 14)
 	end
-	return c:encrypt(s)
+	local e = c:encrypt(s)
+	return e
 end
 
 local function decrypt(key, src)
+	assert(key)
 	if #src % 16 ~= 0 then
 		return nil, 'Src length is not 16n.'
 	end
@@ -815,10 +818,9 @@ local function decrypt(key, src)
 	if not d then
 		return nil, err
 	end
-	d = d:sub(1, -2)
 	local s = ''
 	for i = 1, #d, 16 do
-		s = s..d:sub(i, i + 14)
+		s = s..d:sub(i + 1, i + 15)
 	end
 	return s
 end

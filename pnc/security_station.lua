@@ -1,7 +1,7 @@
 -- Security Station Hack protecter
 -- by zyxkad@gmail.com
 
-local stationName = 'CK Station'
+local stationName = "Claw's Base"
 local stationSide = 'top'
 
 local chatbox = assert(peripheral.find('chatBox'))

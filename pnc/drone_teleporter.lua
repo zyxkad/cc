@@ -1,24 +1,18 @@
 
-triggerSide = 'front'
-enable_whitelist = false
-maxSpawnRetry = 15
-waitBeforeRetry = 6
+local triggerSide = 'front'
+local enable_whitelist = false
+local maxSpawnRetry = 15
+local waitBeforeRetry = 6
 
-whitelist = enable_whitelist and require('whitelist') or nil
+local whitelist = enable_whitelist and require('whitelist') or nil
 
-drone = peripheral.find('drone_interface')
+local drone = peripheral.find('drone_interface')
 if not drone then
 	printError('No drone interface was found')
 	return
 end
 
-detector = peripheral.find('playerDetector')
-if not detector then
-	printError('No player detector was found')
-	return
-end
-
-chatBox = peripheral.find('chatBox')
+local chatBox = peripheral.find('chatBox')
 if not chatBox then
 	printError('No chat box was found')
 	return
@@ -76,6 +70,17 @@ local function waitActionDone(action, timeout)
 	return true
 end
 
+local function getPlayerPos(player)
+	if not drone.isConnectedToDrone() then
+		return nil, 'Drone not connected'
+	end
+	local x, y, z = drone.getVariable('$player_pos='..player)
+	if x == 0 and y == 0 and z == 0 then
+		return nil, 'Player is not online'
+	end
+	return x, y, z
+end
+
 local function spawnDrone()
 	for i = 1, maxSpawnRetry do
 		if drone.isConnectedToDrone() then
@@ -125,11 +130,11 @@ local function tp2(sender, arg)
 	if enable_whitelist and not inList(whitelist, target) then
 		return false, 'The target player are not in the whitelist'
 	end
-	local tg = detector.getPlayerPos(target)
+	local tg = getPlayerPos(target)
 	if not tg then
 		return false, "Target wasn't found"
 	end
-	local sd = detector.getPlayerPos(sender)
+	local sd = getPlayerPos(sender)
 	if not sd then
 		return false, "Cannot locate current position"
 	end
@@ -166,7 +171,7 @@ local function tp3(sender, arg)
 	if not z then
 		return false, "argument 'z' must be a number"
 	end
-	local sd = detector.getPlayerPos(sender)
+	local sd = getPlayerPos(sender)
 	if not sd then
 		return false, "Cannot locate current position"
 	end
@@ -183,7 +188,7 @@ local function warp(sender, arg)
 		return false, "You are not in the whitelist, contact <ckupen> or <zyxkad#4421> in discord to get whitelist"
 	end
 	local target = arg
-	local sd = detector.getPlayerPos(sender)
+	local sd = getPlayerPos(sender)
 	if not sd then
 		return false, "Cannot locate current position"
 	end

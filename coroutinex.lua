@@ -146,7 +146,9 @@ local function main(...)
 	local internalEvents = {}
 	local eventFilter = {}
 	local eventData = {}
+	local instantResume = false
 	while true do
+		instantResume = false
 		local keepLoop = false
 		local eventType = eventData[1]
 		for i, r in pairs(routines) do
@@ -159,7 +161,7 @@ local function main(...)
 						local res = {coroutine.resume(r, table.unpack(next))}
 						next = false
 						local ok, data, p2 = table.unpack(res)
-						if not ok then -- error occured
+						if not ok then -- error occurred
 							if mainThreads[r] then
 								error(data, 1)
 							end
@@ -175,6 +177,8 @@ local function main(...)
 								internalEvents[#internalEvents + 1] = {eventCoroutineDone, r, true, ret}
 							elseif data == '/exit' then
 								return table.unpack(res, 3)
+							elseif data == '/yield' then
+								instantResume = true
 							elseif data == '/run' then
 								local fn = p2
 								local args = {table.unpack(res, 4)}
@@ -183,6 +187,7 @@ local function main(...)
 								routines[j] = thr
 								routines[thr] = j
 								next = {thr}
+								instantResume = true
 							elseif data == '/stop' then -- TODO: is this really needed and safe?
 								local thr = p2
 								local j = routines[thr]
@@ -198,12 +203,16 @@ local function main(...)
 				end
 			end
 		end
+
 		if not keepLoop then
 			return
 		end
+
 		if #internalEvents > 0 then
 			eventData = internalEvents[1]
 			internalEvents = {table.unpack(internalEvents, 2)}
+		elseif instantResume then
+			eventData = {}
 		else
 			local flag
 			repeat

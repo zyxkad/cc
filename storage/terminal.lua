@@ -15,6 +15,7 @@ local REDNET_PROTOCOL = 'storage'
 
 local crx = require('coroutinex')
 local co_run = crx.run
+local await = crx.await
 local co_exit = crx.exit
 local co_main = crx.main
 
@@ -382,7 +383,25 @@ local function onCommand(player, msg)
 		}), player, CHAT_NAME, '##', '§a')
 		local ok, received = takeFromStorage(name, nbt, count)
 		if ok then
-			invManager.addItemToPlayer(cacheInvSide, received)
+			local thrs = {}
+			local count = 0
+			for slot, item in pairs(cacheInv.list()) do
+				if item.name == name and item.nbt == nbt then
+					local icount = item.count
+					count = count + icount
+					if count > received then
+						icount = icount + received - count
+						count = received
+					end
+					thrs[#thrs + 1] = co_run(function()
+						return invManager.addItemToPlayerNBT(cacheInvSide, icount, nil, { fromSlot = slot - 1 })
+					end)
+					if count == received then
+						break
+					end
+				end
+			end
+			await(table.unpack(thrs))
 			pollChatbox().sendFormattedMessageToPlayer(textutils.serialiseJSON({
 				text = '',
 				extra = {

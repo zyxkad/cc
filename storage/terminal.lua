@@ -3,11 +3,17 @@
 
 ---- BEGIN CONFIG ----
 
+if #arg < 4 then
+	print('Usage:')
+	print('  terminal <owner> <invManagerName> <cacheInvName> <cacheInvSide>')
+	return
+end
+
 local modemSide = 'left'
-local cacheInvName = 'quark:variant_chest_0'
-local owner = 'ckupen'
-local invManagerName = 'inventoryManager_2'
-local cacheInvSide = 'front'
+local owner = arg[1] -- 'ckupen'
+local invManagerName = arg[2] -- 'inventoryManager_2'
+local cacheInvName = arg[3] -- 'quark:variant_chest_0'
+local cacheInvSide = arg[4] -- 'front'
 
 ---- END CONFIG ----
 
@@ -16,7 +22,6 @@ local REDNET_PROTOCOL = 'storage'
 local crx = require('coroutinex')
 local co_run = crx.run
 local await = crx.await
-local co_exit = crx.exit
 local co_main = crx.main
 
 local cacheInv = assert(peripheral.wrap(cacheInvName), string.format('Cache inventory %s not found', cacheInvName))
@@ -62,6 +67,14 @@ local function equals(o1, o2, cmpMeta)
 	return true
 end
 
+local function itemIndexName(item)
+	local name = item.name
+	if item.nbt then
+		name = name .. ';' .. item.nbt
+	end
+	return name
+end
+
 local function pollChatbox()
 	while true do
 		local box = peripheral.find('chatBox', function(_, chatbox) return chatbox.getOperationCooldown('chatMessage') == 0 end)
@@ -76,7 +89,7 @@ local function query()
 	local data = {}
 	rednet.broadcast({ cmd='query' }, REDNET_PROTOCOL)
 	while true do
-		local id, reply = rednet.receive(REDNET_PROTOCOL, 0)
+		local id, reply = rednet.receive(REDNET_PROTOCOL, 0.5)
 		if not id then
 			break
 		elseif type(reply) == 'table' and reply.cmd == 'query-reply' then
@@ -86,28 +99,37 @@ local function query()
 	return data
 end
 
-local function countQueryedData(data)
+local function countInvData(data)
 	local counted = {}
-	for _, invs in pairs(data) do
-		for _, inv in pairs(invs) do
-			for _, item in pairs(inv) do
-				local name = item.name
-				if item.nbt then
-					name = name .. ';' .. item.nbt
-				end
-				local c = counted[name]
-				if c then
-					c.count = c.count + item.count
-				else
-					counted[name] = {
-						displayName = item.displayName,
-						count = item.count,
-					}
-				end
+	local totalSt = 0
+	local usedSt = 0
+	local actualSt = 0
+	for _, inv in pairs(data) do
+		totalSt = totalSt + inv.size
+		for _, item in pairs(inv.list) do
+			local name = itemIndexName(item)
+			usedSt = usedSt + item.count / item.maxCount
+			actualSt = actualSt + 1
+			local c = counted[name]
+			if c then
+				c.count = c.count + item.count
+				c.usedSlot = c.usedSlot + 1
+			else
+				counted[name] = {
+					displayName = item.displayName,
+					count = item.count,
+					usedSlot = 1,
+					maxCount = item.maxCount,
+				}
 			end
 		end
 	end
-	return counted
+	return {
+		counted = counted,
+		totalSlot = totalSt,
+		usedSlot = usedSt,
+		actualSt = actualSt,
+	}
 end
 
 local function countedToSorted(counted, sortFn)
@@ -130,7 +152,9 @@ local function countedToSorted(counted, sortFn)
 	return sorted
 end
 
-local queuedData = {}
+local totalSlots = 0
+local usedSlots = 0
+local queriedData = {}
 local counted = {}
 local sortedByNum = {}
 local sortedByName = {}
@@ -138,10 +162,10 @@ local sortedByName = {}
 local function searchItem(name, nbt, count)
 	local flag = true
 	local storages = {}
-	for id, data in pairs(queuedData) do
+	for id, data in pairs(queriedData) do
 		local takingCount = 0
 		for _, inv in pairs(data) do
-			for _, data in pairs(inv) do
+			for slot, data in pairs(inv.list) do
 				if data.name == name and data.nbt == nbt then
 					if data.count >= count then
 						takingCount = takingCount + count
@@ -214,16 +238,67 @@ end
 
 
 local function pollData()
+	local counts = {}
+	local function addupCounts(counts)
+		local counted = {}
+		local totalSlots = 0
+		local usedSlots = 0
+		for _, ct in pairs(counts) do
+			totalSlots = totalSlots + ct.totalSlot
+			usedSlots = usedSlots + ct.usedSlot
+			for name, data in pairs(ct.counted) do
+				local c = counted[name]
+				if c then
+					c.count = c.count + data.count
+					c.usedSlot = c.usedSlot + data.usedSlot
+				else
+					counted[name] = {
+						displayName = data.displayName,
+						count = data.count,
+						usedSlot = data.usedSlot,
+						maxCount = data.maxCount,
+					}
+				end
+			end
+		end
+		return counted, totalSlots, usedSlots
+	end
+
+	queriedData = query()
+	for id, data in pairs(queriedData) do
+		counts[id] = countInvData(data)
+	end
+	counted, totalSlots, usedSlots = addupCounts(counts)
+	sortedByNum = countedToSorted(counted, function(a, b)
+		return a.count > b.count or (a.count == b.count and a.name < b.name)
+	end)
+	sortedByName = countedToSorted(counted, function(a, b)
+		return a.name < b.name or (a.name == b.name and a.count > b.count)
+	end)
 	while true do
-		queuedData = query()
-		counted = countQueryedData(queuedData)
-		sortedByNum = countedToSorted(counted, function(a, b)
-			return a.count > b.count or (a.count == b.count and a.name < b.name)
-		end)
-		sortedByName = countedToSorted(counted, function(a, b)
-			return a.name < b.name or (a.name == b.name and a.count > b.count)
-		end)
-		sleep(1)
+		local id, message = rednet.receive(REDNET_PROTOCOL)
+		if type(message) == 'table' and message.cmd == 'update-storage' then
+			local data = textutils.unserialiseJSON(message.data)
+			queriedData[id] = data
+			counts[id] = countInvData(data)
+			for _ = 1, 20 do
+				local id, message = rednet.receive(REDNET_PROTOCOL, 0)
+				if type(message) == 'table' and message.cmd == 'update-storage' then
+					local data = textutils.unserialiseJSON(message.data)
+					queriedData[id] = data
+					counts[id] = countInvData(data)
+				else
+					break
+				end
+			end
+			counted, totalSlots, usedSlots = addupCounts(counts)
+			sortedByNum = countedToSorted(counted, function(a, b)
+				return a.count > b.count or (a.count == b.count and a.name < b.name)
+			end)
+			sortedByName = countedToSorted(counted, function(a, b)
+				return a.name < b.name or (a.name == b.name and a.count > b.count)
+			end)
+		end
 	end
 end
 
@@ -232,11 +307,14 @@ local offset = 0
 local function render()
 	while true do
 		local sorted = sortedByNum
-		if offset >= #sorted then
+		if offset >= #sorted and #sorted ~= 0 then
 			offset = #sorted - 1
 		elseif offset < 0 then
 			offset = 0
 		end
+		local width, height = term.getSize()
+		term.setTextColor(colors.white)
+		term.setBackgroundColor(colors.black)
 		term.clear()
 		term.setCursorPos(1, 1)
 		term.setTextColor(colors.black)
@@ -248,12 +326,17 @@ local function render()
 		term.setBackgroundColor(colors.black)
 		for i, data in ipairs(sorted) do
 			local y = i - offset
-			if y >= 1 then
+			if 1 <= y and y < height then
 				term.setCursorPos(1, 1 + y)
 				term.write(string.format('%d * [%s] %s', data.count, data.name, data.displayName))
 			end
 		end
-		sleep(0)
+		term.setCursorPos(1, height)
+		term.setTextColor(colors.black)
+		term.setBackgroundColor(colors.lightGray)
+		term.clearLine()
+		term.write(string.format(' %.1f%% %.1f / %d | %s', usedSlots / totalSlots * 100, usedSlots, totalSlots, owner))
+		sleep(0.1)
 	end
 end
 
@@ -263,7 +346,12 @@ local CHAT_WIDTH = 53
 
 local function onCommand(player, msg)
 	if msg == '.ping' then
-		pollChatbox().sendMessageToPlayer('Pong!', player, CHAT_NAME, '##', '§a')
+		pollChatbox().sendMessageToPlayer('Usage:\n' ..
+			'  $.ping : Show this message\n' ..
+			'  $.query [<pattern>] : List item in storage (matchs pattern)\n' ..
+			'  $.put [<slot>] : Put the item on hand (or at slot) into storage\n' ..
+			'  $.take <item> [<count>] : Take item from storage',
+		player, CHAT_NAME, '##', '§a')
 	elseif msg == '.share' then
 		local item = invManager.getItemInHand()
 		if not item then
@@ -283,57 +371,67 @@ local function onCommand(player, msg)
 		}), player, '<>')
 	elseif msg == '.query' or startswith(msg, '.query ') then
 		local param = msg:sub(#'.query ' + 1)
-		-- TODO: search param
 		local reply = {}
 		local sorted = sortedByNum
+		local ct = 0
 		for i, data in ipairs(sorted) do
-			if i >= 100 then
-				break
-			end
-			local takeId = data.name
-			if data.nbt then
-				takeId = takeId .. ';' .. data.nbt
-			end
-			reply[#reply + 1] = {
-				text = '\n',
-			}
-			reply[#reply + 1] = {
-				text = '[-]',
-				color = 'red',
-				underlined = true,
-				clickEvent = {
-					action = 'suggest_command',
-					value = '$.take ' .. takeId .. ' ',
-				},
-				hoverEvent = {
-					action = 'show_text',
-					value = 'Click to take item',
+			if #param == 0 or data.name:find(param) or data.displayName:find(param) then
+				ct = ct + 1
+				if ct >= 95 then
+					break
+				end
+				local takeId = data.name
+				if data.nbt then
+					takeId = takeId .. ';' .. data.nbt
+				end
+				reply[#reply + 1] = {
+					text = '\n',
 				}
-			}
-			reply[#reply + 1] = {
-				text = ' ',
-			}
-			reply[#reply + 1] = {
-				text = string.format('%d * ', data.count),
-				clickEvent = {
-					action = 'copy_to_clipboard',
-					value = takeId,
-				},
-				extra = {
-					{
-						text = string.format('   [%s]', data.displayName:sub(1, 32)),
-						color = 'aqua',
-						hoverEvent = {
-							action = 'show_item',
-							contents = {
-								id = data.name,
-								count = data.count,
+				reply[#reply + 1] = {
+					text = '[-]',
+					color = 'red',
+					underlined = true,
+					clickEvent = {
+						action = 'suggest_command',
+						value = '$.take ' .. takeId .. ' ',
+					},
+					hoverEvent = {
+						action = 'show_text',
+						value = 'Click to take item',
+					}
+				}
+				reply[#reply + 1] = {
+					text = ' ',
+				}
+				reply[#reply + 1] = {
+					text = string.format('%d * ', data.count),
+					clickEvent = {
+						action = 'copy_to_clipboard',
+						value = takeId,
+					},
+					extra = {
+						{
+							-- Three space will show the item icon
+							text = string.format('   [%s]', data.displayName:sub(1, 32)),
+							color = 'aqua',
+							hoverEvent = {
+								action = 'show_item',
+								contents = {
+									id = data.name,
+									count = data.count,
+								},
 							},
 						},
-					},
+					}
 				}
-			}
+			end
 		end
+		reply[#reply + 1] = {
+			text = '\n' .. string.format('Found %d results', ct),
+		}
+		reply[#reply + 1] = {
+			text = '\n' .. string.format('Usage: %.1f%% %.1f / %d', usedSlots / totalSlots * 100, usedSlots, totalSlots),
+		}
 		reply[#reply + 1] = {
 			text = '\n' .. string.rep('=', CHAT_WIDTH),
 			color = 'green',
@@ -454,7 +552,7 @@ local function onCommand(player, msg)
 			end
 			count = item.count
 			for _, data in pairs(list) do
-				if data and data.name == item.name and equals(data.nbt, item.nbt) then
+				if data and data.name == item.name and data.count == item.count and equals(data.nbt, item.nbt) then
 					slot = data.slot
 					break
 				end

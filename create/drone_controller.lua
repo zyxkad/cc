@@ -1,10 +1,14 @@
 -- Clock work Drone controller
 -- by zyxkad@gmail.com
 
+local crx = require('coroutinex')
+local co_main = crx.main
+local await = crx.await
+
 local ship = peripheral.find('ship_reader')
 
 -- constants
-local minRPM = 8
+local startRPM = 20
 
 local motorNames = {
 	frontLeft = 'electric_motor_8',
@@ -50,18 +54,37 @@ end
 
 -- status
 local terminated = false
+
+local shipID = ship.getShipID()
+local mass = ship.getMass()
 local velocity = ship.getVelocity()
 local acceleration = { x=0, y=0, z=0 }
+local netForce = { x=0, y=0, z=0 }
 local rotation = getRotation()
 local rotSpeed = { roll=0, pitch=0, yaw=0 }
 local rotAccel = { roll=0, pitch=0, yaw=0 }
 local postition = ship.getWorldspacePosition()
 
-local maxRPM = 0
+local targetRPM = 0
 local status = 'Idle'
 local action = ''
 local forcing = false
 local pressedKey = {}
+
+-- begin utils
+
+local function round(num)
+	return math.floor(0.5 + num)
+end
+
+local function waitTimer(id)
+	local _, p1
+	repeat
+		_, p1 = os.pullEvent('timer')
+	until p1 == id
+end
+
+-- end utils
 
 local function setSpeed(motor, speed)
 	targetRPMs[motor] = speed
@@ -141,51 +164,10 @@ local function mulRightSpeed(ratio)
 	mulSpeed('backRight', ratio)
 end
 
-local function standBy()
-	setAllSpeed(0)
-end
-
--- begin utils
-
-local function waitTimer(id)
-	local _, p1
-	repeat
-		_, p1 = os.pullEvent('timer')
-	until p1 == id
-end
-
--- end utils
-
 local function listenKey()
 	while true do
-		local event, key, held = os.pullEventRaw()
-		if event == 'terminate' then
-			terminated = true
-			status = 'Landing [Terminated]'
-			maxRPM = 0
-			for id, m in pairs(motors) do
-				targetRPMs[id] = 0
-			end
-			sleep(0.5)
-			for id, m in pairs(motors) do
-				m.setSpeed(0)
-			end
-			error('Terminated', 0)
-			return
-		end
+		local event, key, held = os.pullEvent()
 		if event == 'key' then
-			if key == keys.space then
-				if maxRPM < minRPM then
-					maxRPM = minRPM
-				else
-					maxRPM = math.min(240, maxRPM + 1)
-				end
-			elseif key == keys.leftShift then
-				maxRPM = math.max(0, maxRPM - 5)
-				if maxRPM < minRPM then
-					maxRPM = 0
-				end
-			end
 			if not held then
 				if key == keys.f then
 					forcing = true
@@ -207,12 +189,19 @@ local function update()
 	local dt = 0.05
 	while true do
 		local timerId = os.startTimer(dt)
+
 		local v2 = ship.getVelocity()
 		local r2 = getRotation()
+		mass = ship.getMass()
 		acceleration = {
 			x = (v2.x - velocity.x) / dt,
 			y = (v2.y - velocity.y) / dt,
 			z = (v2.z - velocity.z) / dt,
+		}
+		netForce = {
+			x = acceleration.x * mass,
+			y = acceleration.y * mass,
+			z = acceleration.z * mass,
 		}
 		velocity = v2
 		local rs2 = {
@@ -232,196 +221,173 @@ local function update()
 	end
 end
 
+local function controlTakeOff()
+	targetRPM = startRPM
+	local startY = round(postition.y)
+	local balancedRPM = 0
+	while not terminated do
+		targetRPM = targetRPM + 1
+		if postition.y >= startY + 10 and balancedRPM ~= 0 then
+			targetRPM = balancedRPM
+			setAllSpeed(targetRPM)
+			break
+		end
+		if postition.y >= startY + 5 then
+			if velocity.y > 0.5 then
+				targetRPM = targetRPM - 1
+			end
+			if acceleration.y > 0.3 then
+				targetRPM = targetRPM - 1
+			elseif acceleration.y > 0 then
+				balancedRPM = targetRPM
+			end
+		end
+		setAllSpeed(targetRPM)
+		if acceleration.y <= 0.1 then
+			sleep(1)
+		else
+			sleep(5)
+		end
+	end
+	while not terminated do
+		if postition.y >= startY + 10 then
+			targetRPM = balancedRPM
+			setAllSpeed(targetRPM)
+			break
+		end
+		sleep(0)
+	end
+	return balancedRPM
+end
+
+local function controlMove(balancedRPM)
+	while true do
+		sleep(0.2)
+		if pressedKey[keys.space] then
+			targetRPM = targetRPM + 10
+		end
+		if pressedKey[keys.leftShift] then
+			targetRPM = targetRPM - 10
+			if targetRPM < startRPM then
+				return balancedRPM
+			end
+		end
+		if pressedKey[keys.a] then
+			action = 'turn left'
+			setSpeed('frontLeft', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('frontLeft', targetRPM)
+			setSpeed('backLeft', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('backLeft', targetRPM)
+			setSpeed('backRight', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('backRight', targetRPM)
+			setSpeed('frontRight', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('frontRight', targetRPM)
+			sleep(0.2)
+		end
+		if pressedKey[keys.d] then
+			action = 'turn right'
+			setSpeed('frontRight', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('frontRight', targetRPM)
+			setSpeed('backRight', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('backRight', targetRPM)
+			setSpeed('backLeft', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('backLeft', targetRPM)
+			setSpeed('frontLeft', targetRPM - 5)
+			sleep(0.2)
+			setSpeed('frontLeft', targetRPM)
+			sleep(0.2)
+		end
+		if pressedKey[keys.w] then
+			action = 'forward'
+			setBackSpeed(targetRPM + 5)
+			sleep(0.2)
+			setBackSpeed(targetRPM)
+			sleep(0.4)
+			setFrontSpeed(targetRPM + 5)
+			sleep(0.2)
+			setFrontSpeed(targetRPM)
+			sleep(0.2)
+		end
+		if pressedKey[keys.s] then
+			action = 'backward'
+			setFrontSpeed(targetRPM + 5)
+			sleep(0.2)
+			setFrontSpeed(targetRPM)
+			sleep(0.4)
+			setBackSpeed(targetRPM + 5)
+			sleep(0.2)
+			setBackSpeed(targetRPM)
+			sleep(0.2)
+		end
+		action = ''
+		setAllSpeed(targetRPM)
+	end
+	return balancedRPM
+end
+
+local function controlLand(balancedRPM)
+	targetRPM = balancedRPM
+	repeat
+		targetRPM = math.max(0, targetRPM - 1)
+		setAllSpeed(targetRPM)
+		sleep(0.4)
+		if targetRPM <= 0 then
+			return
+		end
+		if acceleration.y <= 0 and acceleration.y > -0.1 then
+			balancedRPM = targetRPM
+		end
+	until acceleration.y <= -0.1 and velocity.y < 0
+	targetRPM = balancedRPM
+	setAllSpeed(targetRPM)
+	repeat sleep(0) until velocity.y >= 0
+	targetRPM = 0
+	setAllSpeed(0)
+end
+
 local function control()
-	local lastPitch = 0
-	local lastYaw = 0
-	local lastPitchInc = 0
-	local lastYawInc = 0
-	local lastPitchAcc = 0
-	local lastYawAcc = 0
-	local pitchRate = 0
-	local yawRate = 0
-	local balancedPitchRate = 0
-	local balancedYawRate = 0
-	local fixPitch = 0
-	local lastFlipped = false
 	while not terminated do
 		status = 'Idle'
 		action = ''
-		setAllSpeed(maxRPM)
-		if maxRPM > 0 then
-			status = 'Flying'
-			if pressedKey[keys.w] then
-				if forcing then
-					action = 'Forward roll'
-					setFrontSpeed(-maxRPM)
-				else
-					action = 'Forward'
-					mulFrontSpeed(0.9)
-				end
-			end
-			if pressedKey[keys.s] then
-				if forcing then
-					action = 'Backward roll'
-					setBackSpeed(-maxRPM)
-				else
-					action = 'Backward'
-					mulBackSpeed(0.9)
-				end
-			end
-			if pressedKey[keys.a] then
-				if forcing then
-					action = 'Left roll'
-					setLeftSpeed(-maxRPM)
-				else
-					action = 'Left'
-					mulLeftSpeed(0.9)
-				end
-			end
-			if pressedKey[keys.d] then
-				if forcing then
-					action = 'Right roll'
-					setRightSpeed(-maxRPM)
-				else
-					action = 'Right'
-					mulRightSpeed(0.9)
-				end
-			end
-			local pitch = rotation.pitch
-			local yaw = rotation.yaw
-			local pitchInc = pitch - lastPitch
-			local yawInc = yaw - lastYaw
-			local pitchAcc = pitchInc - lastPitchInc
-			local yawAcc = yawInc - lastYawInc
-			local flipped = false
-			if action == '' then
-				local nextPitch = pitch + pitchInc + pitchAcc
-				local nextYaw = yaw + yawInc + yawAcc
-				if pitch >= 90 and nextPitch >= 90 then
-					flipped = true
-					setFrontSpeed(-maxRPM)
-					setBackSpeed(-maxRPM * 2 / 3)
-				elseif pitch <= -90 and nextPitch <= -90 then
-					flipped = true
-					setBackSpeed(-maxRPM)
-					setFrontSpeed(-maxRPM * 2 / 3)
-				else
-					if pitchRate * pitchAcc < 0 then -- not same direction
-						if pitchAcc > 1 then
-							pitchRate = pitchRate * 2 / 3
-						elseif pitchAcc < -1 then
-							pitchRate = pitchRate * 2 / 3
-						else
-							balancedPitchRate = pitchRate
-						end
-					end
-					if pitch > 5 then
-						if pitchRate > 0 then
-							if pitchAcc > 0 then
-								pitchRate = pitchRate + 0.05
-							end
-						else
-							pitchRate = 0
-						end
-						pitchRate = pitchRate + 0.05
-						if pitch > 50 then
-							setFrontSpeed(-maxRPM / 3)
-						end
-					elseif pitch < -5 then
-						if pitchRate < 0 then
-							if pitchAcc < 0 then
-								pitchRate = pitchRate - 0.05
-							end
-						else
-							pitchRate = 0
-						end
-						pitchRate = pitchRate - 0.05
-						if pitch < -50 then
-							setBackSpeed(-maxRPM / 3)
-						end
-					else
-						pitchRate = balancedPitchRate
-					end
-
-					if yawRate * yawAcc < 0 then
-						if yawAcc > 1 then
-							yawRate = yawRate * 2 / 3
-						elseif yawAcc < -1 then
-							yawRate = yawRate * 2 / 3
-						else
-							balancedYawRate = yawRate
-						end
-					end
-					if yaw > 5 then
-						if yawRate > 0 then
-							if yawAcc > 0 then
-								yawRate = yawRate + 0.05
-							end
-						else
-							yawRate = 0
-						end
-						yawRate = yawRate + 0.05
-						if yaw > 50 then
-							setRightSpeed(-maxRPM / 3)
-						end
-					elseif yaw < -5 then
-						if yawRate < 0 then
-							if yawAcc < 0 then
-								yawRate = yawRate - 0.05
-							end
-						else
-							yawRate = 0
-						end
-						yawRate = yawRate - 0.05
-						if yaw < -50 then
-							setLeftSpeed(-maxRPM / 3)
-						end
-					else
-						yawRate = balancedYawRate
-					end
-				end
-			end
-			if lastFlipped and not flipped then
-				setAllSpeed(maxRPM * 3 / 2)
-			end
-			lastFlipped = flipped
-			lastPitch = pitch
-			lastYaw = yaw
-			lastPitchInc = pitchInc
-			lastYawInc = yawInc
-			lastPitchAcc = pitchAcc
-			lastYawAcc = yawAcc
-
-			rates['frontLeft'] = 1
-			rates['frontRight'] = 1
-			rates['backLeft'] = 1
-			rates['backRight'] = 1
-			if not flipped then
-				if pitchRate < 0 then
-					rates['frontLeft'] = 1 - pitchRate
-					rates['frontRight'] = 1 - pitchRate
-				else
-					rates['backLeft'] = 1 + pitchRate
-					rates['backRight'] = 1 + pitchRate
-				end
-				if yawRate < 0 then
-					rates['backRight'] = 1 - yawRate
-					rates['frontRight'] = 1 - yawRate
-				else
-					rates['backLeft'] = 1 + yawRate
-					rates['frontLeft'] = 1 + yawRate
-				end
-			end
+		if pressedKey[keys.space] then
+			status = 'Taking Off'
+			local balancedRPM = controlTakeOff()
+			if terminated then return end
+			status = 'Controlling'
+			balancedRPM = controlMove(balancedRPM)
+			if terminated then return end
+			status = 'Landing'
+			controlLand(balancedRPM)
+			if terminated then return end
 		end
+		sleep(1)
+	end
+end
+
+local function updateMotor()
+	while true do
+		local threads = {}
 		for id, m in pairs(motors) do
 			local r = targetRPMs[id]
+			local t = math.min(256, round(r * rates[id]))
 			if r == 0 then
-				pcall(m.setSpeed, 0)
-			else
-				pcall(m.setSpeed, math.min(256, math.floor(0.5 + r * rates[id])))
+				t = 0
+			end
+			threads[#threads + 1] = function()
+				if t ~= m.getSpeed() then
+					pcall(m.setSpeed, t)
+				end
 			end
 		end
-		sleep(0.35)
+		await(table.unpack(threads))
+		sleep(0)
 	end
 end
 
@@ -437,19 +403,23 @@ local function render()
 		term.clearLine()
 		term.write('Status: ')
 		term.write(status)
+		if action ~= '' then
+			term.write(' ('..action..')')
+		end
 
 		term.setCursorPos(1, 3)
 		term.clearLine()
-		term.write('Action: ')
-		term.write(action)
+		term.write('RPM: ')
+		term.write(targetRPM)
 
 		term.setCursorPos(1, 4)
 		term.clearLine()
-		term.write('Max RPM: ')
-		term.write(maxRPM)
+		term.write('Mass: ')
+		term.write(mass)
 
 		term.setCursorPos(1, 5)
 		term.clearLine()
+		term.setTextColor(colors.white)
 		term.write('Speed:')
 		term.setTextColor(colors.white)
 		term.write(' X: ')
@@ -471,15 +441,49 @@ local function render()
 		term.setTextColor(colors.white)
 		term.write(' R: ')
 		term.setTextColor(colors.red)
-		term.write(string.format('%.2f', rotation.roll))
+		term.write(string.format('%.1f (%+.1f)', rotation.roll, rotSpeed.roll))
 		term.setTextColor(colors.white)
 		term.write(' P: ')
 		term.setTextColor(colors.green)
-		term.write(string.format('%.2f', rotation.pitch))
+		term.write(string.format('%.1f (%+.1f)', rotation.pitch, rotSpeed.pitch))
 		term.setTextColor(colors.white)
 		term.write(' Y: ')
 		term.setTextColor(colors.blue)
-		term.write(string.format('%.2f', rotation.yaw))
+		term.write(string.format('%.1f (%+.1f)', rotation.yaw, rotSpeed.yaw))
+
+		term.setCursorPos(1, 7)
+		term.clearLine()
+		term.setTextColor(colors.white)
+		term.write('Acc:')
+		term.setTextColor(colors.white)
+		term.write(' X: ')
+		term.setTextColor(colors.red)
+		term.write(string.format('%+.2f', acceleration.x))
+		term.setTextColor(colors.white)
+		term.write(' Y: ')
+		term.setTextColor(colors.green)
+		term.write(string.format('%+.2f', acceleration.y))
+		term.setTextColor(colors.white)
+		term.write(' Z: ')
+		term.setTextColor(colors.blue)
+		term.write(string.format('%+.2f', acceleration.z))
+
+		term.setCursorPos(1, 8)
+		term.clearLine()
+		term.setTextColor(colors.white)
+		term.write('Force:')
+		term.setTextColor(colors.white)
+		term.write(' X: ')
+		term.setTextColor(colors.red)
+		term.write(string.format('%+06d', netForce.x))
+		term.setTextColor(colors.white)
+		term.write(' Y: ')
+		term.setTextColor(colors.green)
+		term.write(string.format('%+06d', netForce.y))
+		term.setTextColor(colors.white)
+		term.write(' Z: ')
+		term.setTextColor(colors.blue)
+		term.write(string.format('%+06d', netForce.z))
 
 		term.setTextColor(colors.yellow)
 		term.setCursorPos(1, 14)
@@ -500,17 +504,35 @@ local function render()
 		term.write(string.format('%.1f', rates['backLeft']))
 		term.setCursorPos(20, 15)
 		term.write(string.format('%.1f', rates['backRight']))
-		sleep(0.1)
+		sleep(0)
 	end
 end
 
 function main()
-	os.pullEvent = os.pullEventRaw
-	parallel.waitForAll(
+	co_main(
 		listenKey,
 		update,
 		control,
-		render
+		updateMotor,
+		render,
+		{
+			event = 'terminate',
+			callback = function()
+				terminated = true
+				status = 'Terminated'
+				targetRPM = 0
+				setAllSpeed(0)
+				sleep(0.4)
+				local threads = {}
+				for id, m in pairs(motors) do
+					threads[#threads + 1] = function()
+						m.setSpeed(0)
+					end
+				end
+				co_main(table.unpack(threads))
+				return true
+			end
+		}
 	)
 end
 

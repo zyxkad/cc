@@ -26,31 +26,42 @@ local function asThreads(...)
 		elseif typ ~= 'thread' then
 			error(string.format('Argument #%d is %s, expect a coroutine thread or a function',
 				i, typ), 2)
+		else
+			threads[fn] = i
 		end
-		threads[fn] = i
 	end
 	return threads
 end
 
 local eventCoroutineDone = '#cox_thr_done'
 
+local function newThreadErr(id, value)
+	local err = {
+		index = id,
+		err = value,
+	}
+	setmetatable(err, {
+		__tostring = function(err)
+			return string.format('Error in thread #%d: %s', err.index, err.err)
+		end,
+	})
+	return err
+end
+
 -- wait all threads to return successfully
 local function await(...)
 	local threads = asThreads(...)
 	local rets = {}
 	local event, thr, ret
-	while #rets ~= #threads do
+	local count = 0
+	while count ~= #threads do
 		event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
-		assert(event == eventCoroutineDone, 'event ~= eventCoroutineDone')
 		local i = threads[thr]
 		if i then
 			if not ok then
-				error({
-					msg = string.format('Error in thread #%d: %s', i, ret),
-					index = i,
-					err = ret,
-				}, 2)
+				error(newThreadErr(i, ret), 2)
 			end
+			count = count + 1
 			rets[i] = ret
 		end
 	end
@@ -61,24 +72,33 @@ end
 local function awaitAny(...)
 	local threads = asThreads(...)
 	if #threads == 0 then
-		error({
-			msg = 'No threads could be run',
-		}, 2)
+		error('No threads could be run', 2)
 	end
 	local event, thr, ret
 	local errors = {}
+	local errCount = 0
 	while true do
 		event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
-		assert(event == eventCoroutineDone, 'event ~= eventCoroutineDone')
 		local i = threads[thr]
 		if i then
 			if not ok then
+				errCount = errCount + 1
 				errors[#i] = ret
-				if #errors == #threads then
-					error({
+				if errCount == #threads then
+					local err = {
 						msg = 'All threads failed',
 						errs = errors,
-					}, 2)
+					}
+					setmetatable(err, {
+						__tostring = function(err)
+							local str = err.msg
+							for _, e in ipairs(err.errs) do
+								str = str .. '\n' .. tostring(e)
+							end
+							return str
+						end,
+					})
+					error(err, 2)
 				end
 			end
 			return i, ret
@@ -90,22 +110,15 @@ end
 local function awaitRace(...)
 	local threads = asThreads(...)
 	if #threads == 0 then
-		error({
-			msg = 'No threads could be run',
-		}, 2)
+		error('No threads could be run', 2)
 	end
 	local event, thr, ret
 	while true do
 		event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
-		assert(event == eventCoroutineDone, 'event ~= eventCoroutineDone')
 		local i = threads[thr]
 		if i then
 			if not ok then
-				error({
-					msg = 'Thread failed',
-					index = i,
-					err = ret,
-				}, 2)
+				error(newThreadErr(i, ret), 2)
 			end
 			return i, ret
 		end

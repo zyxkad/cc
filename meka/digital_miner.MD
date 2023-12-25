@@ -24,8 +24,8 @@ The Digital Miner System allows you to place and move mekanism digital miner aut
 
 ## Setup
 
-1. Generate your `id.aes`, use the suggest commands at the top of `aes.lua` 
-2. Makesure your did setup [Security GPS](../sgps.lua)
+1. Generate your `id.aes` if not exists, use the suggest command at the top of [`aes.lua`](../aes.lua)
+2. Makesure your did setup [Security GPS](../sgps.MD)
 
 ### Base Side
 
@@ -50,3 +50,8 @@ The Digital Miner System allows you to place and move mekanism digital miner aut
    ```lua
    shell.run('digital_miner placeAndForward launch')
    ```
+
+### Warn
+
+- Your Digital Miner must be **public** for turtle to control it. However Quantum Entangloporter and Teleporter can be private.
+- The Quantum Entangloporter must set to **input item** from all faces, and **auto eject power** to all faces

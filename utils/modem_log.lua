@@ -16,7 +16,7 @@ function main(args)
 		error('No modem was found')
 	end
 	sleep(1)
-	local starts = 50000
+	local starts = 60000
 	local ends = 65535
 	do
 		local j = 1
@@ -36,13 +36,19 @@ function main(args)
 		end
 		print(string.format('Used %d / %d modems', j, #modems))
 	end
+	local log = fs.open('modem.log', 'w')
 	print(string.format('Opened port from %d - %d', starts, ends))
 	while true do
 		local _, side, schan, rechan, enmsg, distance = os.pullEvent('modem_message')
-		if string.len(enmsg) > 8 then
+		if type(enmsg) == 'string' and string.len(enmsg) > 8 then
 			enmsg = enmsg:sub(1, 8)
+		elseif type(enmsg) == 'table' then
+			enmsg = textutils.serialise(enmsg)
 		end
-		print(string.format('%d: [%s]: %d -> %d (%.2f): %s', os.epoch('utc'), side, rechan, schan, distance, enmsg))
+		local l = string.format('%.2f: [%s]: %d -> %d (%.2f): %s', os.epoch() / 1000, side, rechan, schan, distance, enmsg)
+		print(l)
+		log.writeLine(l)
+		log.flush()
 	end
 end
 

@@ -13,14 +13,17 @@ end
 
 local pickaxeId = 'minecraft:diamond_pickaxe'
 local scannerId = 'advancedperipherals:geo_scanner'
+local lavaBucketId = 'minecraft:lava_bucket'
 
 -- 0 ~ 50
 -- place at y = 50
 local maxLevel = -10
 local minLevel = -50
-local targetOre = '#minecraft:block/forge:ores/osmium'
+local targetOre = '#minecraft:block/forge:ores/lead'
 local targetItems = {
 	['mekanism:raw_osmium'] = 1,
+	['mekanism:raw_lead'] = 1,
+	['immersiveengineering:raw_lead'] = 1,
 }
 local coalOre = '#minecraft:block/forge:ores/coal'
 local coalId = 'minecraft:coal'
@@ -31,8 +34,8 @@ local posCacheName = '/geoPos.json'
 
 local function selectItem(item)
 	for i = 1, 16 do
-		local detial = turtle.getItemDetail(i)
-		if detial and detial.name == item then
+		local detail = turtle.getItemDetail(i)
+		if detail and detail.name == item then
 			turtle.select(i)
 			return true
 		end
@@ -189,13 +192,14 @@ local function goPos(x, y, z)
 end
 
 local function hasFreeSlot()
+	local c = 0
 	for i = 1, 16 do
 		local count = turtle.getItemCount(i)
 		if count == 0 then
-			return true
+			c = c + 1
 		end
 	end
-	return false
+	return c > 4
 end
 
 --- end utils
@@ -209,8 +213,8 @@ end
 local function refuel()
 	local flag = false
 	for i = 1, 16 do
-		local detial = turtle.getItemDetail(i)
-		if detial and detial.name == coalId then
+		local detail = turtle.getItemDetail(i)
+		if detail and detail.name == coalId then
 			turtle.select(i)
 			turtle.refuel(flag and detail.count or detail.count - 1)
 			flag = true
@@ -232,7 +236,7 @@ local function cleanInventory()
 					turtle.dropDown(detail.count)
 				end
 				flag = true
-			elseif not targetItems[name] and name ~= pickaxeId and name ~= scannerId then
+			elseif not targetItems[name] and name ~= pickaxeId and name ~= scannerId and name ~= lavaBucketId then
 				turtle.select(i)
 				turtle.dropDown(detail.count)
 			end
@@ -271,7 +275,8 @@ local function scan()
 	local x, y, z = lps.locate()
 	local ores = {}
 	for _, d in pairs(scaned) do
-		if y + d.y < maxLevel then
+		local y1 = y + d.y
+		if minLevel <= y1 and y1 < maxLevel then
 			for _, t in pairs(d.tags) do
 				t = '#'..t
 				if t == targetOre then
@@ -408,6 +413,7 @@ end
 
 function main(args)
 	while true do
+		turnTo('+x')
 		shell.run('lava_refueler')
 		local fd = fs.open(posCacheName, 'r')
 		local flag = false
@@ -434,14 +440,14 @@ function main(args)
 		scanAndDig()
 		goHome()
 		for i = 1, 16 do
-			local detial = turtle.getItemDetail(i)
-			if detial then
-				local item = detial.name
+			local detail = turtle.getItemDetail(i)
+			if detail then
+				local item = detail.name
 				if item == coalId then
 					turtle.select(i)
 					turtle.refuel(detail.count)
 				end
-				if item ~= pickaxeId and item ~= scannerId then
+				if item ~= pickaxeId and item ~= scannerId and item ~= lavaBucketId then
 					turtle.select(i)
 					local p = targetItems[item]
 					if p then

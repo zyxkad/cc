@@ -17,6 +17,7 @@ local HOSTNAME = string.format('depot-%d', os.getComputerID())
 
 local crx = require('coroutinex')
 local co_run = crx.run
+local asleep = crx.asleep
 local await = crx.await
 local co_main = crx.main
 
@@ -103,17 +104,21 @@ local function itemIndexName(item)
 end
 
 local function pollInvLists()
+	local pool = crx.newThreadPool(200)
 	while true do
-		local thrs = {}
 		local data = {}
 		for invName, inv in pairs(inventories) do
-			thrs[#thrs + 1] = co_run(function(data, inv, invName)
+			pool.queue(function(data, inv, invName)
 				local ths = {}
 				local list = {}
 				local resCache = {}
 				local defers = {}
-				local size0, items0 = await(inv.p.size, inv.p.list)
-				local size, items = size0[1], items0[1]
+				local size, items
+				await(pool.queue(function()
+					size = inv.p.size()
+				end), pool.queue(function()
+					items = inv.p.list()
+				end))
 				for slot, item in pairs(items) do
 					local ind = itemIndexName(item)
 					local cacheSlot = resCache[ind]
@@ -122,7 +127,7 @@ local function pollInvLists()
 						list[slot] = item
 					else
 						resCache[ind] = slot
-						ths[#ths + 1] = co_run(function(list, p, slot)
+						ths[#ths + 1] = pool.queue(function(list, p, slot)
 							list[slot] = p.getItemDetail(slot)
 						end, list, inv.p, slot)
 					end
@@ -139,12 +144,11 @@ local function pollInvLists()
 					list = list,
 				}
 				inv.d = d
-				-- print('putting:', invName)
 				data[invName] = d
 			end, data, inv, invName)
 		end
-		await(function() sleep(1) end, function()
-			await(table.unpack(thrs))
+		await(asleep(1), function()
+			pool.waitForAll()
 			rednet.broadcast({
 				cmd = 'update-storage',
 				name = HOSTNAME,

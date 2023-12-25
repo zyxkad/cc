@@ -47,10 +47,17 @@ local function pollCommands()
 					cmd = 'pong',
 					name = HOSTNAME,
 					type = 'cpu',
+					space = space,
 				}, REDNET_PROTOCOL)
-			elseif message.cmd == 'prepare-craft' then
-				local target_item = message.item
-				rednet.send()
+			elseif message.cmd == 'craft' then
+				local targetItem, count, recipes = message.item, message.count, message.recipes
+				-- TODO
+				rednet.send(id, {
+					cmd = 'craft-reply',
+					name = HOSTNAME,
+					item = targetItem,
+					count = count,
+				}, REDNET_PROTOCOL)
 			end
 		end
 	end

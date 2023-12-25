@@ -1,8 +1,16 @@
 -- coroutine extra
 -- by zyxkad@gmail.com
 
+local function current()
+	return coroutine.yield('/current')
+end
+
 local function run(fn, ...)
-	assert(type(fn) == 'function', 'Argument #1(fn) must be a function')
+	if type(fn) == 'thread' then
+		assert(#{...} == 0, 'thread cannot have any argument')
+	else
+		assert(type(fn) == 'function', 'Argument #1(fn) must be a function or a coroutine thread')
+	end
 	local thr = coroutine.yield('/run', fn, ...)
 	return thr
 end
@@ -42,7 +50,7 @@ local function newThreadErr(id, value)
 	}
 	setmetatable(err, {
 		__tostring = function(err)
-			return string.format('Error in thread #%d: %s', err.index, err.err)
+			return string.format('Error in thread #%d:\n %s', err.index, err.err)
 		end,
 	})
 	return err
@@ -52,10 +60,9 @@ end
 local function await(...)
 	local threads = asThreads(...)
 	local rets = {}
-	local event, thr, ret
 	local count = 0
 	while count ~= #threads do
-		event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
+		local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
 		local i = threads[thr]
 		if i then
 			if not ok then
@@ -74,16 +81,15 @@ local function awaitAny(...)
 	if #threads == 0 then
 		error('No threads could be run', 2)
 	end
-	local event, thr, ret
 	local errors = {}
 	local errCount = 0
 	while true do
-		event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
+		local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
 		local i = threads[thr]
 		if i then
 			if not ok then
 				errCount = errCount + 1
-				errors[#i] = ret
+				errors[i] = ret
 				if errCount == #threads then
 					local err = {
 						msg = 'All threads failed',
@@ -112,9 +118,8 @@ local function awaitRace(...)
 	if #threads == 0 then
 		error('No threads could be run', 2)
 	end
-	local event, thr, ret
 	while true do
-		event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
+		local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
 		local i = threads[thr]
 		if i then
 			if not ok then
@@ -192,10 +197,17 @@ local function main(...)
 								return table.unpack(res, 3)
 							elseif data == '/yield' then
 								instantResume = true
+							elseif data == '/current' then
+								next = {r}
 							elseif data == '/run' then
-								local fn = p2
-								local args = {table.unpack(res, 4)}
-								local thr = coroutine.create(function() return fn(table.unpack(args)) end)
+								local thr
+								if type(p2) == 'thread' then
+									thr = p2
+								else
+									local fn = p2
+									local args = {table.unpack(res, 4)}
+									thr = coroutine.create(function() return fn(table.unpack(args)) end)
+								end
 								local j = #routines + 1
 								routines[j] = thr
 								routines[thr] = j
@@ -248,10 +260,95 @@ local function main(...)
 	end
 end
 
+local function newThreadPool(limit)
+	local count = 0
+	local running = {}
+	local waiting = {}
+	local pool = {}
+
+	pool.running = function() return count end
+	pool.limit = function() return limit end
+
+	pool.queue = function(fn, ...)
+		local typ = type(fn)
+		if typ ~= 'function' then
+			error(string.format('Argument #1 is %s, but expect a function', typ), 2)
+		end
+		local args = {...}
+		local thr = coroutine.create(function() fn(table.unpack(args)) end)
+		if count < limit then
+			count = count + 1
+			local i = #running + 1
+			running[i] = thr
+			running[thr] = i
+			run(thr)
+		else
+			waiting[#waiting + 1] = thr
+		end
+		return thr
+	end
+
+	pool.exec = function(fn, ...)
+		return table.unpack(await(pool.queue(fn, ...)))
+	end
+
+	-- -- release the current thread fron the pool
+	-- pool.release = function()
+	-- 	local thr = current()
+	-- 	local i = running[thr]
+	-- 	if i then
+	-- 		if #waiting > 0 then
+	-- 			running[thr] = nil
+	-- 			local nxt = table.remove(waiting, 1)
+	-- 			running[i] = nxt
+	-- 			running[nxt] = i
+	-- 			run(nxt)
+	-- 		else
+	-- 			running[i] = nil
+	-- 			running[thr] = nil
+	-- 			count = count - 1
+	-- 		end
+	-- 		return true
+	-- 	end
+	-- 	return false
+	-- end
+
+	pool.waitForAll = function()
+		while count > 0 do
+			local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
+			local i = running[thr]
+			if i then
+				if not ok then
+					error(newThreadErr(-i, ret), 2)
+				end
+				if #waiting > 0 then
+					running[thr] = nil
+					local nxt = table.remove(waiting, 1)
+					running[i] = nxt
+					running[nxt] = i
+					run(nxt)
+				else
+					running[i] = nil
+					running[thr] = nil
+					count = count - 1
+				end
+			end
+		end
+	end
+
+	return pool
+end
+
+
 return {
+	current = current,
 	run = run,
 	exit = exit,
+	asleep = asleep,
 	await = await,
 	awaitAny = awaitAny,
+	awaitRace = awaitRace,
 	main = main,
+
+	newThreadPool = newThreadPool,
 }

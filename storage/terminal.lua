@@ -3,17 +3,51 @@
 
 ---- BEGIN CONFIG ----
 
-if #arg < 4 then
-	print('Usage:')
-	print('  terminal <owner> <invManagerName> <cacheInvName> <cacheInvSide>')
-	return
+local modemSide = 'left'
+
+local function split(s, sep)
+	local i, j = string.find(s, sep, 1, true)
+	if not i then
+		return s, ''
+	end
+	return s:sub(1, i - 1), s:sub(j + 1)
 end
 
-local modemSide = 'left'
-local owner = arg[1] -- 'ckupen'
-local invManagerName = arg[2] -- 'inventoryManager_2'
-local cacheInvName = arg[3] -- 'quark:variant_chest_0'
-local cacheInvSide = arg[4] -- 'front'
+local invManagers = {}
+local CONFIG_FILENAME = 'chat_terminal.cfg'
+do
+	local fd = fs.open(CONFIG_FILENAME, 'r')
+	if fd then
+		while true do
+			local line = fd.readLine()
+			if not line or #line == 0 then
+				break
+			end
+			local invManagerName, line = split(line, '=')
+			local invManager = peripheral.wrap(invManagerName)
+			if not peripheral.hasType(invManagerName, 'inventoryManager') then
+				error(string.format('Inventory manager %s not found', invManagerName))
+			end
+			local cacheInvName, cacheInvSide = split(line, '/')
+			local cacheInv = peripheral.wrap(cacheInvName)
+			if not peripheral.hasType(cacheInvName, 'inventory') then
+				error(string.format('Cache inventory chest %s not found', cacheInvName))
+			end
+			invManagers[invManagerName] = {
+				manager = invManager,
+				cacheName = cacheInvName,
+				cache = cacheInv,
+				cacheSide = cacheInvSide,
+			}
+		end
+		fd.close()
+	else
+		local fd = fs.open(CONFIG_FILENAME, 'w')
+		fd.write('inventoryManager_N=minecraft:chest_N/front\n')
+		fd.close()
+		error(string.format('Config %s was not exsits, created a new one.', CONFIG_FILENAME))
+	end
+end
 
 ---- END CONFIG ----
 
@@ -23,9 +57,6 @@ local crx = require('coroutinex')
 local co_run = crx.run
 local await = crx.await
 local co_main = crx.main
-
-local cacheInv = assert(peripheral.wrap(cacheInvName), string.format('Cache inventory %s not found', cacheInvName))
-local invManager = assert(peripheral.wrap(invManagerName))
 
 local function startswith(s, prefix)
 	return string.find(s, prefix, 1, true) == 1
@@ -88,48 +119,16 @@ end
 local function query()
 	local data = {}
 	rednet.broadcast({ cmd='query' }, REDNET_PROTOCOL)
-	while true do
+	local endTime = os.clock() + 10
+	repeat
 		local id, reply = rednet.receive(REDNET_PROTOCOL, 0.5)
 		if not id then
 			break
 		elseif type(reply) == 'table' and reply.cmd == 'query-reply' then
 			data[id] = reply.data
 		end
-	end
+	until os.clock() > endTime
 	return data
-end
-
-local function countInvData(data)
-	local counted = {}
-	local totalSt = 0
-	local usedSt = 0
-	local actualSt = 0
-	for _, inv in pairs(data) do
-		totalSt = totalSt + inv.size
-		for _, item in pairs(inv.list) do
-			local name = itemIndexName(item)
-			usedSt = usedSt + item.count / item.maxCount
-			actualSt = actualSt + 1
-			local c = counted[name]
-			if c then
-				c.count = c.count + item.count
-				c.usedSlot = c.usedSlot + 1
-			else
-				counted[name] = {
-					displayName = item.displayName,
-					count = item.count,
-					usedSlot = 1,
-					maxCount = item.maxCount,
-				}
-			end
-		end
-	end
-	return {
-		counted = counted,
-		totalSlot = totalSt,
-		usedSlot = usedSt,
-		actualSt = actualSt,
-	}
 end
 
 local function countedToSorted(counted, sortFn)
@@ -154,35 +153,22 @@ end
 
 local totalSlots = 0
 local usedSlots = 0
+local actualSlots = 0
 local queriedData = {}
-local counted = {}
 local sortedByNum = {}
 local sortedByName = {}
 
 local function searchItem(name, nbt, count)
 	local flag = true
 	local storages = {}
+	local ind = itemIndexName({ name=name, nbt=nbt })
 	for id, data in pairs(queriedData) do
-		local takingCount = 0
-		for _, inv in pairs(data) do
-			for slot, data in pairs(inv.list) do
-				if data.name == name and data.nbt == nbt then
-					if data.count >= count then
-						takingCount = takingCount + count
-						count = 0
-						break
-					end
-					takingCount = takingCount + data.count
-					count = count - data.count
-				end
-			end
-			if count == 0 then
-				break
-			end
-		end
-		if takingCount > 0 then
-			flag = false
+		local item = data.counted[ind]
+		if item and item.count > 0 then
+			local takingCount = math.min(count, item.count)
 			storages[id] = takingCount
+			count = count - takingCount
+			flag = false
 		end
 		if count == 0 then
 			break
@@ -194,7 +180,7 @@ local function searchItem(name, nbt, count)
 	return storages, count
 end
 
-local function takeFromStorage(name, nbt, count)
+local function takeFromStorage(cfgData, name, nbt, count)
 	local storages = searchItem(name, nbt, count)
 	if not storages then
 		return false
@@ -206,17 +192,17 @@ local function takeFromStorage(name, nbt, count)
 			name = name,
 			nbt = nbt,
 			count = ct,
-			target = cacheInvName,
+			target = cfgData.cacheName,
 		}, REDNET_PROTOCOL)
 		waiting = waiting + 1
 	end
 	local received = 0
-	while waiting > 0 do
-		local id, message = rednet.receive(REDNET_PROTOCOL, 5)
+	local endTime = os.clock() + 10
+	while waiting > 0 and os.clock() <= endTime do
+		local id, message = rednet.receive(REDNET_PROTOCOL, 3)
 		if not id then
 			break
-		end
-		if type(message) == 'table' and message.cmd == 'take-reply' and storages[id] then
+		elseif type(message) == 'table' and message.cmd == 'take-reply' and storages[id] then
 			received = received + message.pushed
 			waiting = waiting - 1
 		end
@@ -224,28 +210,29 @@ local function takeFromStorage(name, nbt, count)
 	return true, received
 end
 
-local function putToStorage()
+local function putToStorage(cfgData)
 	local slots = {}
-	for slot, item in pairs(cacheInv.list()) do
+	for slot, item in pairs(cfgData.cache.list()) do
 		slots[slot] = item.count
 	end
 	rednet.broadcast({
 		cmd = 'put',
-		source = cacheInvName,
+		source = cfgData.cacheName,
 		slots = slots,
 	}, REDNET_PROTOCOL)
 end
 
 
 local function pollData()
-	local counts = {}
 	local function addupCounts(counts)
 		local counted = {}
 		local totalSlots = 0
 		local usedSlots = 0
+		local actualSlots = 0
 		for _, ct in pairs(counts) do
 			totalSlots = totalSlots + ct.totalSlot
 			usedSlots = usedSlots + ct.usedSlot
+			actualSlots = actualSlots + ct.actualSlot
 			for name, data in pairs(ct.counted) do
 				local c = counted[name]
 				if c then
@@ -261,14 +248,11 @@ local function pollData()
 				end
 			end
 		end
-		return counted, totalSlots, usedSlots
+		return counted, totalSlots, usedSlots, actualSlots
 	end
 
 	queriedData = query()
-	for id, data in pairs(queriedData) do
-		counts[id] = countInvData(data)
-	end
-	counted, totalSlots, usedSlots = addupCounts(counts)
+	counted, totalSlots, usedSlots, actualSlots = addupCounts(queriedData)
 	sortedByNum = countedToSorted(counted, function(a, b)
 		return a.count > b.count or (a.count == b.count and a.name < b.name)
 	end)
@@ -278,20 +262,17 @@ local function pollData()
 	while true do
 		local id, message = rednet.receive(REDNET_PROTOCOL)
 		if type(message) == 'table' and message.cmd == 'update-storage' then
-			local data = textutils.unserialiseJSON(message.data)
-			queriedData[id] = data
-			counts[id] = countInvData(data)
-			for _ = 1, 20 do
+			queriedData[id] = message.data
+			local endTime = os.clock() + 10
+			repeat
 				local id, message = rednet.receive(REDNET_PROTOCOL, 0)
-				if type(message) == 'table' and message.cmd == 'update-storage' then
-					local data = textutils.unserialiseJSON(message.data)
-					queriedData[id] = data
-					counts[id] = countInvData(data)
-				else
+				if not id then
 					break
+				elseif type(message) == 'table' and message.cmd == 'update-storage' then
+					queriedData[id] = message.data
 				end
-			end
-			counted, totalSlots, usedSlots = addupCounts(counts)
+			until os.clock() > endTime
+			counted, totalSlots, usedSlots, actualSlots = addupCounts(queriedData)
 			sortedByNum = countedToSorted(counted, function(a, b)
 				return a.count > b.count or (a.count == b.count and a.name < b.name)
 			end)
@@ -335,16 +316,16 @@ local function render()
 		term.setTextColor(colors.black)
 		term.setBackgroundColor(colors.lightGray)
 		term.clearLine()
-		term.write(string.format(' %.1f%% %.1f / %d | %s', usedSlots / totalSlots * 100, usedSlots, totalSlots, owner))
+		term.write(string.format(' %.1f%% %.1f / %d / %d', actualSlots / totalSlots * 100, usedSlots, actualSlots, totalSlots))
 		sleep(0.1)
 	end
 end
 
-local CHAT_NAME = '§e§lCC Storage Terminal§r'
-local CHAT_HEAD = '§a============== ' .. CHAT_NAME .. '§a ==============='
+local CHAT_NAME = '§eCC Storage Terminal§r'
+local CHAT_HEAD = '§a============== §e§lCC Storage Terminal§r§a ==============='
 local CHAT_WIDTH = 53
 
-local function onCommand(player, msg)
+local function onCommand(cfgData, player, msg)
 	if msg == '.ping' then
 		pollChatbox().sendMessageToPlayer('Usage:\n' ..
 			'  $.ping : Show this message\n' ..
@@ -353,7 +334,7 @@ local function onCommand(player, msg)
 			'  $.take <item> [<count>] : Take item from storage',
 		player, CHAT_NAME, '##', '§a')
 	elseif msg == '.share' then
-		local item = invManager.getItemInHand()
+		local item = cfgData.manager.getItemInHand()
 		if not item then
 			return
 		end
@@ -370,12 +351,12 @@ local function onCommand(player, msg)
 			},
 		}), player, '<>')
 	elseif msg == '.query' or startswith(msg, '.query ') then
-		local param = msg:sub(#'.query ' + 1)
+		local param = msg:sub(#'.query ' + 1):lower()
 		local reply = {}
 		local sorted = sortedByNum
 		local ct = 0
 		for i, data in ipairs(sorted) do
-			if #param == 0 or data.name:find(param) or data.displayName:find(param) then
+			if #param == 0 or data.name:lower():find(param) or data.displayName:lower():find(param) then
 				ct = ct + 1
 				if ct >= 95 then
 					break
@@ -430,7 +411,7 @@ local function onCommand(player, msg)
 			text = '\n' .. string.format('Found %d results', ct),
 		}
 		reply[#reply + 1] = {
-			text = '\n' .. string.format('Usage: %.1f%% %.1f / %d', usedSlots / totalSlots * 100, usedSlots, totalSlots),
+			text = '\n' .. string.format('Usage: %.1f%% %.1f / %d / %d', actualSlots / totalSlots * 100, usedSlots, actualSlots, totalSlots),
 		}
 		reply[#reply + 1] = {
 			text = '\n' .. string.rep('=', CHAT_WIDTH),
@@ -450,10 +431,9 @@ local function onCommand(player, msg)
 		else
 			name = param
 		end
-		i = name:find(';')
-		if i then
-			nbt = name:sub(i + 1)
-			name = name:sub(1, i - 1)
+		name, nbt = split(name, ';')
+		if #nbt == 0 then
+			nbt = nil
 		end
 		count = count or 1
 		pollChatbox().sendFormattedMessageToPlayer(textutils.serialiseJSON({
@@ -479,11 +459,11 @@ local function onCommand(player, msg)
 				}
 			},
 		}), player, CHAT_NAME, '##', '§a')
-		local ok, received = takeFromStorage(name, nbt, count)
+		local ok, received = takeFromStorage(cfgData, name, nbt, count)
 		if ok then
 			local thrs = {}
 			local count = 0
-			for slot, item in pairs(cacheInv.list()) do
+			for slot, item in pairs(cfgData.cache.list()) do
 				if item.name == name and item.nbt == nbt then
 					local icount = item.count
 					count = count + icount
@@ -492,7 +472,7 @@ local function onCommand(player, msg)
 						count = received
 					end
 					thrs[#thrs + 1] = co_run(function()
-						return invManager.addItemToPlayerNBT(cacheInvSide, icount, nil, { fromSlot = slot - 1 })
+						return cfgData.manager.addItemToPlayerNBT(cfgData.cacheSide, icount, nil, { fromSlot = slot - 1 })
 					end)
 					if count == received then
 						break
@@ -508,7 +488,7 @@ local function onCommand(player, msg)
 						color = 'blue',
 					},
 					{
-						text = string.format('[%s] * %d', name, received),
+						text = string.format('   [%s]', name),
 						color = 'aqua',
 						clickEvent = {
 							action = 'copy_to_clipboard',
@@ -518,15 +498,18 @@ local function onCommand(player, msg)
 							action = 'show_item',
 							contents = {
 								id = name,
-								count = count,
+								count = received,
 							},
 						},
+					},
+					{
+						text = string.format(' * %d', received)
 					}
 				},
 			}), player, CHAT_NAME, '##', '§a')
 		else
 			pollChatbox().sendFormattedMessageToPlayer(textutils.serialiseJSON({
-				text = 'Error: Cannot take item',
+				text = 'Error: Cannot found item ' .. name,
 				color = 'red',
 				bold = true,
 			}), player, CHAT_NAME, '##', '§a')
@@ -536,12 +519,12 @@ local function onCommand(player, msg)
 		local slot = tonumber(param)
 		local count = 64
 		if not slot then
-			local list
-			local item
-			parallel.waitForAll(
-				function() list = invManager.list() end,
-				function() item = invManager.getItemInHand() end
-			)
+			local list, item
+			await(function()
+				list = cfgData.manager.list()
+			end, function()
+				item = cfgData.manager.getItemInHand()
+			end)
 			if not item or not next(item) then
 				pollChatbox().sendFormattedMessageToPlayer(textutils.serialiseJSON({
 					text = 'Error: Please hand an item or give a slot number',
@@ -566,8 +549,9 @@ local function onCommand(player, msg)
 				return
 			end
 		end
-		invManager.removeItemFromPlayerNBT(cacheInvSide, count, nil, { fromSlot=slot, toSlot=10 })
-		putToStorage()
+		pollChatbox().sendMessageToPlayer(string.format('Sending slot %d', slot), player, CHAT_NAME, '##', '§a')
+		cfgData.manager.removeItemFromPlayerNBT(cfgData.cacheSide, count, nil, { fromSlot=slot })
+		putToStorage(cfgData)
 	end
 end
 
@@ -586,8 +570,12 @@ local function pollEvent()
 			end
 		elseif event == 'chat' then
 			local player, msg = p1, p2
-			if player == owner then
-				onCommand(player, msg)
+			for _, cfgData in pairs(invManagers) do
+				local owner = cfgData.manager.getOwner()
+				if owner and player == owner then
+					co_run(onCommand, cfgData, player, msg)
+					break
+				end
 			end
 		end
 	end

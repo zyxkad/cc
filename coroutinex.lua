@@ -136,6 +136,11 @@ local function clearTable(t)
 	end
 end
 
+local function queueInternalEvent(name, ...)
+	assert(type(name) == 'string')
+	coroutine.yield('/queue', name, ...)
+end
+
 local function main(...)
 	local routines = {}
 	local mainThreads = {}
@@ -178,7 +183,7 @@ local function main(...)
 					repeat
 						local res = {coroutine.resume(r, table.unpack(next))}
 						next = false
-						local ok, data, p2 = table.unpack(res)
+						local ok, data = res[1], res[2]
 						if not ok then -- error occurred
 							if mainThreads[r] then
 								error(data, 1)
@@ -193,35 +198,41 @@ local function main(...)
 								routines[r] = nil
 								local ret = {table.unpack(res, 2)}
 								internalEvents[#internalEvents + 1] = {eventCoroutineDone, r, true, ret}
-							elseif data == '/exit' then
-								return table.unpack(res, 3)
-							elseif data == '/yield' then
-								instantResume = true
-							elseif data == '/current' then
-								next = {r}
-							elseif data == '/run' then
-								local thr
-								if type(p2) == 'thread' then
-									thr = p2
-								else
-									local fn = p2
-									local args = {table.unpack(res, 4)}
-									thr = coroutine.create(function() return fn(table.unpack(args)) end)
-								end
-								local j = #routines + 1
-								routines[j] = thr
-								routines[thr] = j
-								next = {thr}
-								instantResume = true
-							elseif data == '/stop' then -- TODO: is this really needed and safe?
-								local thr = p2
-								local j = routines[thr]
-								if j then
-									routines[j] = nil
-									routines[thr] = nil
-								end
 							elseif type(data) == 'string' then
-								eventFilter[r] = data
+								if data == '/exit' then
+									return table.unpack(res, 3)
+								elseif data == '/current' then
+									next = {r}
+								elseif data == '/yield' then
+									instantResume = true
+								elseif data == '/queue' then
+									internalEvents[#internalEvents + 1] = {table.unpack(res, 3)}
+									next = {}
+								elseif data == '/run' then
+									local thr
+									local p2 = res[3]
+									if type(p2) == 'thread' then
+										thr = p2
+									else
+										local fn = p2
+										local args = {table.unpack(res, 4)}
+										thr = coroutine.create(function() return fn(table.unpack(args)) end)
+									end
+									local j = #routines + 1
+									routines[j] = thr
+									routines[thr] = j
+									next = {thr}
+									instantResume = true
+								elseif data == '/stop' then -- TODO: is this really needed and safe?
+									local thr = res[3]
+									local j = routines[thr]
+									if j then
+										routines[j] = nil
+										routines[thr] = nil
+									end
+								else
+									eventFilter[r] = data
+								end
 							end
 						end
 					until not next
@@ -234,8 +245,7 @@ local function main(...)
 		end
 
 		if #internalEvents > 0 then
-			eventData = internalEvents[1]
-			internalEvents = {table.unpack(internalEvents, 2)}
+			eventData = table.remove(internalEvents, 1)
 		elseif instantResume then
 			eventData = {}
 		else
@@ -339,6 +349,62 @@ local function newThreadPool(limit)
 	return pool
 end
 
+local eventLockIdle = '#crx_lock_idle'
+
+local function newLock()
+	local lock = {}
+	local count = 0 -- 0: idle, -1: write locked, 1+: read locked
+
+	-- write lock
+	lock.lock = function()
+		while count ~= 0 do
+			coroutine.yield(eventLockIdle)
+		end
+		count = -1
+	end
+
+	lock.tryLock = function()
+		if count ~= 0 then
+			return false
+		end
+		count = -1
+		return true
+	end
+
+	-- write unlock
+	lock.unlock = function()
+		assert(count == -1)
+		count = 0
+		queueInternalEvent(eventLockIdle, lock)
+	end
+
+	-- read lock
+	lock.rLock = function()
+		while count < 0 do
+			coroutine.yield(eventLockIdle)
+		end
+		count = count + 1
+	end
+
+	lock.tryRLock = function()
+		if count < 0 then
+			return false
+		end
+		count = count + 1
+		return true
+	end
+
+	-- read unlock
+	lock.rUnlock = function()
+		assert(count > 0)
+		count = count - 1
+		if count == 0 then
+			queueInternalEvent(eventLockIdle, lock)
+		end
+	end
+
+	return lock
+end
 
 return {
 	current = current,
@@ -351,4 +417,5 @@ return {
 	main = main,
 
 	newThreadPool = newThreadPool,
+	newLock = newLock,
 }

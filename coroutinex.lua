@@ -61,6 +61,13 @@ local function await(...)
 	local threads = asThreads(...)
 	local rets = {}
 	local count = 0
+	for thr, _ in pairs(threads) do
+		if type(thr) == 'thread' then
+			if coroutine.status(thr) == 'dead' then
+				error('Thread is already end')
+			end
+		end
+	end
 	while count ~= #threads do
 		local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
 		local i = threads[thr]
@@ -72,7 +79,7 @@ local function await(...)
 			rets[i] = ret
 		end
 	end
-	return table.unpack(rets)
+	return table.unpack(rets, 1, count)
 end
 
 -- wait the first threads to return successfully
@@ -168,7 +175,7 @@ local function main(...)
 
 	local internalEvents = {}
 	local eventFilter = {}
-	local eventData = {}
+	local eventData = { n = 0 }
 	local instantResume = false
 	while true do
 		instantResume = false
@@ -181,12 +188,12 @@ local function main(...)
 					eventFilter[r] = nil
 					local next = eventData
 					repeat
-						local res = {coroutine.resume(r, table.unpack(next))}
+						local res = table.pack(coroutine.resume(r, table.unpack(next, 1, next.n)))
 						next = false
 						local ok, data = res[1], res[2]
 						if not ok then -- error occurred
 							if mainThreads[r] then
-								error(data, 1)
+								error(tostring(r) .. ': ' .. tostring(data), 1)
 							end
 							routines[i] = nil
 							routines[r] = nil
@@ -196,7 +203,7 @@ local function main(...)
 							if isDead then
 								routines[i] = nil
 								routines[r] = nil
-								local ret = {table.unpack(res, 2)}
+								local ret = table.pack(table.unpack(res, 2, res.n))
 								internalEvents[#internalEvents + 1] = {eventCoroutineDone, r, true, ret}
 							elseif type(data) == 'string' then
 								if data == '/exit' then
@@ -206,7 +213,7 @@ local function main(...)
 								elseif data == '/yield' then
 									instantResume = true
 								elseif data == '/queue' then
-									internalEvents[#internalEvents + 1] = {table.unpack(res, 3)}
+									internalEvents[#internalEvents + 1] = table.pack(table.unpack(res, 3, res.n))
 									next = {}
 								elseif data == '/run' then
 									local thr
@@ -215,8 +222,7 @@ local function main(...)
 										thr = p2
 									else
 										local fn = p2
-										local args = {table.unpack(res, 4)}
-										thr = coroutine.create(function() return fn(table.unpack(args)) end)
+										thr = coroutine.create(function() return fn(table.unpack(res, 4, res.n)) end)
 									end
 									local j = #routines + 1
 									routines[j] = thr
@@ -252,11 +258,11 @@ local function main(...)
 			local flag
 			repeat
 				flag = true
-				eventData = {os.pullEventRaw()}
+				eventData = table.pack(os.pullEventRaw())
 				local l = eventListeners[eventData[1]]
 				if l then
 					for _, d in pairs(l) do
-						if d.callback(table.unpack(eventData)) == false then
+						if d.callback(table.unpack(eventData, 1, eventData.n)) == false then
 							flag = false
 							break
 						end
@@ -284,8 +290,8 @@ local function newThreadPool(limit)
 		if typ ~= 'function' then
 			error(string.format('Argument #1 is %s, but expect a function', typ), 2)
 		end
-		local args = {...}
-		local thr = coroutine.create(function() fn(table.unpack(args)) end)
+		local args = table.pack(...)
+		local thr = coroutine.create(function() fn(table.unpack(args, 1, args.n)) end)
 		if count < limit then
 			count = count + 1
 			local i = #running + 1

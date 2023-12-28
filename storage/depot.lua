@@ -1,4 +1,5 @@
 -- CC Storage - Depot
+-- Item storage
 -- by zyxkad@gmail.com
 
 ---- BEGIN CONFIG ----
@@ -33,6 +34,15 @@ local cacheInvOutside = assert(peripheral.wrap(cacheInvOutsideName), string.form
 
 
 local inventories = {}
+local counted = {}
+
+local function itemIndexName(item)
+	local name = item.name
+	if item.nbt then
+		name = name .. ';' .. item.nbt
+	end
+	return name
+end
 
 local function addStorage(name)
 	if inventories[name] then
@@ -42,37 +52,36 @@ local function addStorage(name)
 	local inv = peripheral.wrap(name)
 	inventories[name] = {
 		p = inv, -- peripheral
-		d = nil, -- data / content
+		list = nil, -- data / content
+		size = nil,
 	}
 end
 
-local function searchItem(name, nbt, count)
+local function searchAndTakeItemFromCounted(name, nbt, count)
 	local res = {}
-	for invName, inv in pairs(inventories) do
-		if inv.d then
-			for slot, data in pairs(inv.d.list) do
-				if type(slot) == 'number' and data.name == name and data.nbt == nbt then
-					if data.count >= count then
-						res[#res + 1] = {
-							inv = invName,
-							slot = slot,
-							count = count,
-						}
-						count = 0
-						break
-					end
-					count = count - data.count
-					res[#res + 1] = {
-						inv = invName,
-						slot = slot,
-						count = data.count,
-					}
-				end
-			end
-			if count == 0 then
-				break
-			end
+	local ind = itemIndexName({ name=name, nbt=nbt })
+	local data = counted[ind]
+	if not data then
+		return nil
+	end
+	for i, pos in pairs(data.positions) do
+		if pos.count >= count then
+			pos.count = pos.count - count
+			res[#res + 1] = {
+				inv = pos.inv,
+				slot = pos.slot,
+				count = count,
+			}
+			count = 0
+			break
 		end
+		data.positions[i] = nil
+		count = count - pos.count
+		res[#res + 1] = {
+			inv = pos.inv,
+			slot = pos.slot,
+			count = pos.count,
+		}
 	end
 	return res
 end
@@ -95,22 +104,14 @@ local function pollInvs()
 	end
 end
 
-local function itemIndexName(item)
-	local name = item.name
-	if item.nbt then
-		name = name .. ';' .. item.nbt
-	end
-	return name
-end
-
 local invLock = crx.newLock()
 local invData = nil
 
 local function pollInvLists()
-	local pool = crx.newThreadPool(200)
+	local pool = crx.newThreadPool(100)
 	while true do
 		invLock.rLock()
-		local counted = {}
+		local countedLc = {}
 		local totalSt = 0
 		local usedSt = 0
 		local actualSt = 0
@@ -132,68 +133,94 @@ local function pollInvLists()
 					local cacheSlot = resCache[ind]
 					if cacheSlot then
 						defers[item] = cacheSlot
+						local c = countedLc[ind]
+						c.count = c.count + item.count
+						c.usedSlot = c.usedSlot + 1
+						c.positions[#c.positions + 1] = {
+							inv = invName,
+							slot = slot,
+							count = item.count,
+						}
 					else
 						resCache[ind] = item
+						countedLc[ind] = {
+							count = item.count,
+							usedSlot = 1,
+							positions = {
+								{
+									inv = invName,
+									slot = slot,
+									count = item.count,
+								},
+							},
+						}
 						ths[#ths + 1] = pool.queue(function(item, p, slot)
 							local details = p.getItemDetail(slot)
 							if not details then
-								error(string.format('slot: %s/%d does not exsits', invName, slot))
+								error(string.format('slot: %s/%d does not exists', invName, slot))
 							end
 							item.displayName = details.displayName
 							item.maxCount = details.maxCount
 							usedSt = usedSt + item.count / item.maxCount
 							actualSt = actualSt + 1
-							counted[ind] = {
-								displayName = item.displayName,
-								count = item.count,
-								usedSlot = 1,
-								maxCount = item.maxCount,
-							}
+							local c = countedLc[ind]
+							c.displayName = item.displayName
+							c.maxCount = item.maxCount
 						end, item, inv.p, slot)
 					end
 				end
 				await(table.unpack(ths))
-				inv.d = {
-					size = size,
-					list = list,
-				}
+				inv.size = size
+				inv.list = list
 			end, inv, invName)
 		end
-		await(asleep(1), function()
-			pool.waitForAll()
-			invLock.rUnlock()
 
-			for item, details in pairs(defers) do
-				item.displayName = details.displayName
-				item.maxCount = details.maxCount
-				usedSt = usedSt + item.count / item.maxCount
-				actualSt = actualSt + 1
-				local c = counted[itemIndexName(item)]
-				c.count = c.count + item.count
-				c.usedSlot = c.usedSlot + 1
-			end
+		pool.waitForAll()
+		print('poll done', os.clock())
+		invLock.rUnlock()
 
-			invData = {
-				counted = counted,
-				totalSlot = totalSt,
-				usedSlot = usedSt,
-				actualSlot = actualSt,
-			}
-			rednet.broadcast({
-				cmd = 'update-storage',
-				name = HOSTNAME,
-				data = invData,
-			}, REDNET_PROTOCOL)
-		end)
+		for item, details in pairs(defers) do
+			item.displayName = details.displayName
+			item.maxCount = details.maxCount
+			usedSt = usedSt + item.count / item.maxCount
+			actualSt = actualSt + 1
+		end
+
+		counted = countedLc
+		invData = {
+			counted = counted,
+			totalSlot = totalSt,
+			usedSlot = usedSt,
+			actualSlot = actualSt,
+		}
+		rednet.broadcast({
+			cmd = 'update-storage',
+			name = HOSTNAME,
+			data = invData,
+		}, REDNET_PROTOCOL)
+
+		sleep(3)
 	end
 end
 
 local function cmdTake(id, name, nbt, count, target)
+	count = count or 1
+
+	print('taking', count, name, os.clock())
 	invLock.lock()
 
-	count = count or 1
 	-- search item in the storage
-	local res = searchItem(name, nbt, count)
+	local res = searchAndTakeItemFromCounted(name, nbt, count)
+	if not res then
+		invLock.unlock()
+
+		rednet.send(id, {
+			cmd = 'take-reply',
+			name = HOSTNAME,
+			pushed = 0,
+		}, REDNET_PROTOCOL)
+		return
+	end
 	local thrs = {}
 	-- push item to local cache
 	for _, data in pairs(res) do
@@ -204,16 +231,22 @@ local function cmdTake(id, name, nbt, count, target)
 	invLock.unlock()
 
 	-- push item from local cache to remote
+	local remains = {}
 	local pushed = 0
 	thrs = {}
 	for slot, data in pairs(cacheInvOutside.list()) do
 		thrs[#thrs + 1] = co_run(function(slot, data)
-			pushed = pushed + cacheInvOutside.pushItems(target, slot, data.count)
+			local ct = cacheInvOutside.pushItems(target, slot, data.count)
+			local remain = data.count - ct
+			if remain ~= 0 then
+				remains[slot] = remain
+			end
+			pushed = pushed + ct
 		end, slot, data)
 	end
-	print('waiting transfer to target', os.clock())
+	print('waiting transfer to', target, os.clock())
 	await(table.unpack(thrs))
-	print('done to transfer to target', os.clock())
+	print('done to transfer to', target, os.clock())
 
 	rednet.send(id, {
 		cmd = 'take-reply',
@@ -224,12 +257,15 @@ local function cmdTake(id, name, nbt, count, target)
 	if pushed < count then
 		-- clear cache
 		local thrs = {}
-		for slot, data in pairs(cacheInvInside.list()) do
+		for slot, remain in pairs(remains) do
 			for invName, _ in pairs(inventories) do
-				thrs[#thrs + 1] = co_run(cacheInvInside.pushItems, invName, slot)
+				local ct = cacheInvInside.pushItems(invName, slot, remain)
+				remain = remain - ct
+				if remain == 0 then
+					break
+				end
 			end
 		end
-		await(table.unpack(thrs))
 	end
 end
 
@@ -238,7 +274,9 @@ local function cmdPut(id, source, slots)
 	local thrs = {}
 	-- pull item from remote to local cache
 	for slot, count in pairs(slots) do
-		thrs[#thrs + 1] = co_run(cacheInvOutside.pullItems, source, slot, count)
+		thrs[#thrs + 1] = co_run(function(source, slot, count)
+			received = received + cacheInvOutside.pullItems(source, slot, count)
+		end, source, slot, count)
 	end
 	await(table.unpack(thrs))
 	-- push item from cache to storage
@@ -284,18 +322,18 @@ local function pollCommands()
 					name = HOSTNAME,
 					type = 'depot',
 				}, REDNET_PROTOCOL)
-			elseif message.cmd == 'query' then
+			elseif message.cmd == 'query-storage' then
 				if invData then
 					rednet.send(id, {
-						cmd = 'query-reply',
+						cmd = 'query-storage-reply',
 						name = HOSTNAME,
 						data = invData,
 					}, REDNET_PROTOCOL)
 				end
 			elseif message.cmd == 'take' then
-				cmdTake(id, message.name, message.nbt, message.count, message.target)
+				co_run(cmdTake, id, message.name, message.nbt, message.count, message.target)
 			elseif message.cmd == 'put' then
-				cmdPut(id, message.source, message.slots)
+				co_run(cmdPut, id, message.source, message.slots)
 			end
 		end
 	end

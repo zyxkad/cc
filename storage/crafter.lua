@@ -9,7 +9,9 @@ local co_run = crx.run
 local await = crx.await
 local co_main = crx.main
 
-local modem = peripheral.find('modem', function(_, modem) return not modem.isWireless() end)
+local network = require('network')
+
+local modem = peripheral.find('modem', function(_, modem) return peripheral.hasType(modem, 'peripheral_hub') end)
 local localName = modem.getNameLocal()
 
 -- recipe example
@@ -49,22 +51,7 @@ local crafting = false
 local preparing = nil
 local prepareTimeout = nil
 
-local function cmdCraft(id, source, recipe, count)
-	if crafting then
-		rednet.send(id, {
-			cmd = 'craft-reply',
-			name = HOSTNAME,
-			crafted = false,
-			err = 'Craft in process',
-		}, REDNET_PROTOCOL)
-		return
-	end
-	crafting = true
-	preparing = nil
-	prepareTimeout = nil
-
-	print('Crafting for', id, '...')
-
+local function cmdCraft(reply, source, recipe, count)
 	local sourceInv = peripheral.wrap(source)
 	local list = sourceInv.list()
 
@@ -100,55 +87,49 @@ local function cmdCraft(id, source, recipe, count)
 	print('Craft done:', ok, err)
 
 	if ok then
-		rednet.send(id, {
-			cmd = 'craft-reply',
-			name = HOSTNAME,
+		reply({
 			crafted = true,
 			count = count,
-		}, REDNET_PROTOCOL)
+		})
 	else
-		rednet.send(id, {
-			cmd = 'craft-reply',
-			name = HOSTNAME,
+		reply({
 			crafted = false,
 			err = err,
-		}, REDNET_PROTOCOL)
-	end
-end
-
-local function pollCommands()
-	while true do
-		local id, message = rednet.receive()
-		if type(message) == 'table' then
-			if message.cmd == 'ping' then
-				-- rednet.send does not block
-				rednet.send(id, {
-					cmd = 'pong',
-					name = HOSTNAME,
-					type = 'turtle-crafter',
-				}, REDNET_PROTOCOL)
-			elseif message.cmd == 'prepare-craft' then
-				if not crafting and (not preparing or os.clock() > prepareTimeout) then
-					print('Preparing for', id, '...')
-					preparing = id
-					prepareTimeout = os.clock() + 5
-					rednet.send(id, {
-						cmd = 'prepare-craft-reply',
-						name = HOSTNAME,
-					}, REDNET_PROTOCOL)
-				end
-			elseif message.cmd == 'craft' then
-				cmdCraft(id, message.source, message.recipe, message.count)
-			end
-		end
+		})
 	end
 end
 
 function main(args)
-	rednet.open(peripheral.getName(modem))
-	rednet.host(REDNET_PROTOCOL, HOSTNAME)
+	network.setType('crafter')
+	network.open(modem)
 
-	co_main(pollCommands)
+	network.registerCommand('prepare-craft', function(_, sender, _, reply)
+		if not crafting and (not preparing or os.clock() > prepareTimeout) then
+			print('Preparing for', sender, '...')
+			preparing = sender
+			prepareTimeout = os.clock() + 10
+			reply()
+		end
+	end)
+
+	network.registerCommand('craft', function(_, sender, payload, reply)
+		if crafting then
+			reply({
+				crafted = false,
+				err = 'Craft in process',
+			})
+			return
+		end
+		crafting = true
+		preparing = nil
+		prepareTimeout = nil
+
+		print('Crafting for', sender, '...')
+
+		co_run(cmdCraft, reply, payload.source, payload.recipe, payload.count)
+	end)
+
+	co_main(network.run)
 end
 
 main({...})

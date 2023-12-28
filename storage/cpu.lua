@@ -18,13 +18,12 @@ local storageTypes = {
 
 ---- END CONFIG ----
 
-local REDNET_PROTOCOL = 'storage'
-local HOSTNAME = string.format('cpu-%d', os.getComputerID())
-
 local crx = require('coroutinex')
 local co_run = crx.run
 local await = crx.await
 local co_main = crx.main
+
+local network = require('network')
 
 
 assert(peripheral.hasType(insideModemSide, 'modem'))

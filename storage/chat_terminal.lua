@@ -1,9 +1,7 @@
--- CC Storage - Terminal
+-- CC Storage - Chat Terminal
 -- by zyxkad@gmail.com
 
 ---- BEGIN CONFIG ----
-
-local modemSide = 'left'
 
 local function split(s, sep)
 	local i, j = string.find(s, sep, 1, true)
@@ -51,12 +49,12 @@ end
 
 ---- END CONFIG ----
 
-local REDNET_PROTOCOL = 'storage'
-
 local crx = require('coroutinex')
 local co_run = crx.run
 local await = crx.await
 local co_main = crx.main
+
+local network = require('network')
 
 local function startswith(s, prefix)
 	return string.find(s, prefix, 1, true) == 1
@@ -116,19 +114,8 @@ local function pollChatbox()
 	end
 end
 
-local function query()
-	local data = {}
-	rednet.broadcast({ cmd='query-storage' }, REDNET_PROTOCOL)
-	local endTime = os.clock() + 10
-	repeat
-		local id, reply = rednet.receive(REDNET_PROTOCOL, 0.5)
-		if not id then
-			break
-		elseif type(reply) == 'table' and reply.cmd == 'query-storage-reply' then
-			data[id] = reply.data
-		end
-	until os.clock() > endTime
-	return data
+local function queryStorage()
+	return network.broadcast('query-storage', nil, 5)
 end
 
 local function countedToSorted(counted, sortFn)
@@ -151,10 +138,11 @@ local function countedToSorted(counted, sortFn)
 	return sorted
 end
 
+local updated = false -- does queriedData updated
+local queriedData = {}
 local totalSlots = 0
 local usedSlots = 0
 local actualSlots = 0
-local queriedData = {}
 local sortedByNum = {}
 local sortedByName = {}
 
@@ -185,28 +173,22 @@ local function takeFromStorage(cfgData, name, nbt, count)
 	if not storages then
 		return false
 	end
-	local waiting = 0
-	for id, ct in pairs(storages) do
-		rednet.send(id, {
-			cmd = 'take',
-			name = name,
-			nbt = nbt,
-			count = ct,
-			target = cfgData.cacheName,
-		}, REDNET_PROTOCOL)
-		waiting = waiting + 1
-	end
 	local received = 0
-	local endTime = os.clock() + 10
-	while waiting > 0 and os.clock() <= endTime do
-		local id, message = rednet.receive(REDNET_PROTOCOL, 5)
-		if not id then
-			break
-		elseif type(message) == 'table' and message.cmd == 'take-reply' and storages[id] then
-			received = received + message.pushed
-			waiting = waiting - 1
-		end
+	local thrs = {}
+	for id, ct in pairs(storages) do
+		thrs[#thrs + 1] = co_run(function(id, ct)
+			local ok, data = network.send(id, 'take', {
+				name = name,
+				nbt = nbt,
+				count = ct,
+				target = cfgData.cacheName,
+			}, true, 10)
+			if ok then
+				received = received + data.pushed
+			end
+		end, id, ct)
 	end
+	await(table.unpack(thrs))
 	return true, received
 end
 
@@ -215,11 +197,10 @@ local function putToStorage(cfgData)
 	for slot, item in pairs(cfgData.cache.list()) do
 		slots[slot] = item.count
 	end
-	rednet.broadcast({
-		cmd = 'put',
+	network.broadcast('put', {
 		source = cfgData.cacheName,
 		slots = slots,
-	}, REDNET_PROTOCOL)
+	})
 end
 
 
@@ -251,7 +232,7 @@ local function pollData()
 		return counted, totalSlots, usedSlots, actualSlots
 	end
 
-	queriedData = query()
+	queriedData = queryStorage()
 	counted, totalSlots, usedSlots, actualSlots = addupCounts(queriedData)
 	sortedByNum = countedToSorted(counted, function(a, b)
 		return a.count > b.count or (a.count == b.count and a.name < b.name)
@@ -260,18 +241,9 @@ local function pollData()
 		return a.name < b.name or (a.name == b.name and a.count > b.count)
 	end)
 	while true do
-		local id, message = rednet.receive(REDNET_PROTOCOL)
-		if type(message) == 'table' and message.cmd == 'update-storage' then
-			queriedData[id] = message.data
-			local endTime = os.clock() + 10
-			repeat
-				local id, message = rednet.receive(REDNET_PROTOCOL, 0)
-				if not id then
-					break
-				elseif type(message) == 'table' and message.cmd == 'update-storage' then
-					queriedData[id] = message.data
-				end
-			until os.clock() > endTime
+		sleep(1)
+		if updated then
+			updated = false
 			counted, totalSlots, usedSlots, actualSlots = addupCounts(queriedData)
 			sortedByNum = countedToSorted(counted, function(a, b)
 				return a.count > b.count or (a.count == b.count and a.name < b.name)
@@ -593,9 +565,17 @@ local function pollEvent()
 end
 
 function main(args)
-	rednet.open(modemSide)
+	network.setType('chat-terminal')
+	peripheral.find('modem', function(modemSide)
+		network.open(modemSide)
+	end)
 
-	co_main(pollData, render, pollEvent)
+	network.registerCommand('update-storage', function(_, sender, payload)
+		queriedData[sender] = payload
+		updated = true
+	end)
+
+	co_main(network.run, pollData, pollEvent, render)
 end
 
 main({...})

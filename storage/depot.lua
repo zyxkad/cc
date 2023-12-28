@@ -13,14 +13,13 @@ local cacheInvOutsideName = 'minecraft:barrel_4'
 
 ---- END CONFIG ----
 
-local REDNET_PROTOCOL = 'storage'
-local HOSTNAME = string.format('depot-%d', os.getComputerID())
-
 local crx = require('coroutinex')
 local co_run = crx.run
 local asleep = crx.asleep
 local await = crx.await
 local co_main = crx.main
+
+local network = require('network')
 
 
 assert(peripheral.hasType(insideModemSide, 'modem'))
@@ -193,17 +192,13 @@ local function pollInvLists()
 			usedSlot = usedSt,
 			actualSlot = actualSt,
 		}
-		rednet.broadcast({
-			cmd = 'update-storage',
-			name = HOSTNAME,
-			data = invData,
-		}, REDNET_PROTOCOL)
+		network.broadcast('update-storage', invData)
 
 		sleep(3)
 	end
 end
 
-local function cmdTake(id, name, nbt, count, target)
+local function cmdTake(reply, name, nbt, count, target)
 	count = count or 1
 
 	print('taking', count, name, os.clock())
@@ -214,11 +209,9 @@ local function cmdTake(id, name, nbt, count, target)
 	if not res then
 		invLock.unlock()
 
-		rednet.send(id, {
-			cmd = 'take-reply',
-			name = HOSTNAME,
+		reply({
 			pushed = 0,
-		}, REDNET_PROTOCOL)
+		})
 		return
 	end
 	local thrs = {}
@@ -248,11 +241,9 @@ local function cmdTake(id, name, nbt, count, target)
 	await(table.unpack(thrs))
 	print('done to transfer to', target, os.clock())
 
-	rednet.send(id, {
-		cmd = 'take-reply',
-		name = HOSTNAME,
+	reply({
 		pushed = pushed,
-	}, REDNET_PROTOCOL)
+	})
 
 	if pushed < count then
 		-- clear cache
@@ -269,7 +260,7 @@ local function cmdTake(id, name, nbt, count, target)
 	end
 end
 
-local function cmdPut(id, source, slots)
+local function cmdPut(reply, source, slots)
 	local received = 0
 	local thrs = {}
 	-- pull item from remote to local cache
@@ -303,47 +294,29 @@ local function cmdPut(id, source, slots)
 		end
 		await(table.unpack(thrs))
 	end
-	rednet.send(id, {
-		cmd = 'put-reply',
-		name = HOSTNAME,
+	reply({
 		received = received,
 		deposited = deposited,
-	}, REDNET_PROTOCOL)
-end
-
-local function pollCommands()
-	while true do
-		local id, message = rednet.receive(REDNET_PROTOCOL)
-		if type(message) == 'table' then
-			if message.cmd == 'ping' then
-				-- rednet.send does not block
-				rednet.send(id, {
-					cmd = 'pong',
-					name = HOSTNAME,
-					type = 'depot',
-				}, REDNET_PROTOCOL)
-			elseif message.cmd == 'query-storage' then
-				if invData then
-					rednet.send(id, {
-						cmd = 'query-storage-reply',
-						name = HOSTNAME,
-						data = invData,
-					}, REDNET_PROTOCOL)
-				end
-			elseif message.cmd == 'take' then
-				co_run(cmdTake, id, message.name, message.nbt, message.count, message.target)
-			elseif message.cmd == 'put' then
-				co_run(cmdPut, id, message.source, message.slots)
-			end
-		end
-	end
+	})
 end
 
 function main(args)
-	rednet.open(outsideModemSide)
-	rednet.host(REDNET_PROTOCOL, HOSTNAME)
+	network.setType('depot')
+	network.open(outsideModemSide)
 
-	co_main(pollInvs, pollInvLists, pollCommands)
+	network.registerCommand('query-storage', function(_, _, payload, reply)
+		reply(invData)
+	end)
+
+	network.registerCommand('take', function(_, _, payload, reply)
+		co_run(cmdTake, reply, payload.name, payload.nbt, payload.count, payload.target)
+	end)
+
+	network.registerCommand('put', function(_, _, payload, reply)
+		co_run(cmdPut, reply, payload.source, payload.slots)
+	end)
+
+	co_main(network.run, pollInvs, pollInvLists)
 end
 
 main({...})

@@ -63,8 +63,8 @@ local function pollCommands()
 end
 
 function main(args)
-	rednet.open(outsideModemSide)
-	rednet.host(REDNET_PROTOCOL, HOSTNAME)
+	network.setType('cpu')
+	network.open(outsideModemSide)
 
 	co_run(pollCommands)
 end

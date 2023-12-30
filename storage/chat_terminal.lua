@@ -302,7 +302,7 @@ local function onCommand(cfgData, player, msg)
 		pollChatbox().sendMessageToPlayer('Usage:\n' ..
 			'  $.ping : Show this message\n' ..
 			'  $.query [<pattern>] : List item in storage (matchs pattern)\n' ..
-			'  $.put [<slot>] : Put the item on hand (or at slot) into storage\n' ..
+			'  $.put [<slot>|same] : Put the item on hand (or at slot) into storage\n' ..
 			'  $.take <item> [<count>] : Take item from storage',
 		player, CHAT_NAME, '##', '§a')
 	elseif msg == '.share' then
@@ -503,6 +503,32 @@ local function onCommand(cfgData, player, msg)
 					color = 'red',
 					bold = true,
 				}), player, CHAT_NAME, '##', '§a')
+				return
+			end
+			if param == 's' or param == 'same' then
+				local count = 0
+				local slots = {}
+				for _, data in pairs(list) do
+					if data and data.name == item.name and equals(data.nbt, item.nbt) then
+						slots[data.slot] = data.count
+						count = count + 1
+					end
+				end
+				if count == 0 then
+					pollChatbox().sendFormattedMessageToPlayer(textutils.serialiseJSON({
+						text = 'Error: Cannot find same item',
+						color = 'red',
+						bold = true,
+					}), player, CHAT_NAME, '##', '§a')
+					return
+				end
+				pollChatbox().sendMessageToPlayer(string.format('Sending %d slots', count), player, CHAT_NAME, '##', '§a')
+				local thrs = {}
+				for slot, count in pairs(slots) do
+					thrs[#thrs + 1] = co_run(cfgData.manager.removeItemFromPlayerNBT, cfgData.cacheSide, count, nil, { fromSlot=slot })
+				end
+				await(table.unpack(thrs))
+				putToStorage(cfgData)
 				return
 			end
 			count = item.count

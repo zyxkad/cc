@@ -266,7 +266,8 @@ local function cmdPut(reply, source, slots)
 	-- pull item from remote to local cache
 	for slot, count in pairs(slots) do
 		thrs[#thrs + 1] = co_run(function(source, slot, count)
-			received = received + cacheInvOutside.pullItems(source, slot, count)
+			local pulled = cacheInvOutside.pullItems(source, slot, count)
+			received = received + pulled
 		end, source, slot, count)
 	end
 	await(table.unpack(thrs))

@@ -276,6 +276,8 @@ local function main(...)
 	end
 end
 
+local eventPoolTasksDone = '#crx_pool_tasks_done'
+
 local function newThreadPool(limit)
 	local count = 0
 	local running = {}
@@ -331,6 +333,12 @@ local function newThreadPool(limit)
 
 	pool.waitForAll = function()
 		while count > 0 do
+			coroutine.yield(eventPoolTasksDone)
+		end
+	end
+
+	run(function()
+		while true do
 			local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
 			local i = running[thr]
 			if i then
@@ -347,10 +355,13 @@ local function newThreadPool(limit)
 					running[i] = nil
 					running[thr] = nil
 					count = count - 1
+					if count == 0 then
+						queueInternalEvent(eventPoolTasksDone, pool)
+					end
 				end
 			end
 		end
-	end
+	end)
 
 	return pool
 end

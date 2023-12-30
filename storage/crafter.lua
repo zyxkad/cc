@@ -17,9 +17,9 @@ local localName = modem.getNameLocal()
 -- recipe example
 -- {
 -- 	grid = {
--- 		{ 'a  ' },
--- 		{ 'a  ' },
--- 		{ 'b  ' },
+-- 		'a  ',
+-- 		'a  ',
+-- 		'b  ',
 -- 	},
 -- 	slots = {
 -- 		a = {

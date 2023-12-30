@@ -218,9 +218,11 @@ local function run()
 				if cb then
 					local replied = false
 					cb(cmd, sender, payload, function(response)
-						assert(not replied, 'Cannot reply twice')
-						replied = true
-						_reply(cmd, sender, replyCh, messageId, response)
+						if messageId then
+							assert(not replied, 'Cannot reply twice')
+							replied = true
+							_reply(cmd, sender, replyCh, messageId, response)
+						end
 					end)
 				end
 			end

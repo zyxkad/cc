@@ -7,7 +7,7 @@ local crx = require('coroutinex')
 local htFileNameGuesses = {
 	function(name) return name end,
 	function(name) return name .. '.ht' end,
-	function(name) return name .. '/ht' end
+	function(name) return name .. '/index.ht' end
 }
 
 local function openFile(name)

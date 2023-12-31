@@ -26,7 +26,7 @@ script other_script -- same as above, but `onload` function won't be called
 	>> GO to tweaked.cc
 	;;
 
--- /img abs=true right=6 bottom="5"\
+-- /img abs=true right=6 bottom="5" \
  -- src=https://tweaked.cc/pack.png width=5 height=5 @click=.imgClick
 	-- `@` means an action, `@click` means click action and it will call imgClick in example.lua
 
@@ -55,3 +55,7 @@ The following is a dash and a comment \- --
 /br
 The following is a comment --\-
 /br
+
+/input @change="onInputChanged" @blur="onSaveInput" placeholder="click to input" \
+ col=20
+

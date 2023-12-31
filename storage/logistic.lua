@@ -29,6 +29,7 @@ local function itemIndexName(item)
 end
 
 local function countItemList(inv)
+	local invName = peripheral.getName(inv)
 	local listFn = inv.list or inv.getInventory
 	local ok, list = pcall(listFn)
 	if not ok or not list then
@@ -42,6 +43,7 @@ local function countItemList(inv)
 			if poses then
 				poses.n = poses.n + 1
 				poses.l[#poses.l + 1] = {
+					invName = name,
 					slot = slot,
 					count = item.count,
 				}
@@ -50,6 +52,7 @@ local function countItemList(inv)
 					n = 1,
 					l = {
 						{
+							invName = name,
 							slot = slot,
 							count = item.count,
 						},
@@ -62,33 +65,36 @@ local function countItemList(inv)
 end
 
 local function countFluidList(inv)
-	local listFn = inv.list
-	local ok, list = pcall(listFn)
-	if not ok or not list then
+	local invName = peripheral.getName(inv)
+	local tanksFn = inv.tanks or inv.getOutputFluids
+	if not tanksFn then
+		local ok, info = pcall(inv.getInfo)
+		if not ok or not info then
+			return nil
+		end
+		local fluidName = info.fluid
+		if fluidName and fluidName ~= 'minecraft:air' and fluidName ~= 'minecraft:empty' then
+			return {
+				[fluidName] = {
+					invName = invName,
+					amount = info.amount,
+				}
+			}
+		end
+		return nil
+	end
+	local ok, tanks = pcall(tanksFn)
+	if not ok or not tanks then
 		return nil
 	end
 	local counted = {}
-	for slot, item in pairs(list) do
-		if item.name then
-			local ind = itemIndexName(item)
-			local poses = counted[ind]
-			if poses then
-				poses.n = poses.n + 1
-				poses.l[#poses.l + 1] = {
-					slot = slot,
-					count = item.count,
-				}
-			else
-				counted[ind] = {
-					n = 1,
-					l = {
-						{
-							slot = slot,
-							count = item.count,
-						},
-					},
-				}
-			end
+	for _, tank in pairs(tanks) do
+		local fluidName = tank.name or tank.fluid
+		if fluidName and fluidName ~= 'minecraft:air' and fluidName ~= 'minecraft:empty' then
+			counted[fluidName] = {
+				invName = invName,
+				amount = tank.amount,
+			}
 		end
 	end
 	return counted
@@ -107,6 +113,7 @@ local function parseLogisticFile()
 	--  	"type": "order", // order / round / random / inverse
 	--  	"list": [
 	--  		{
+	--  			"fluid": false,
 	--  			"name": "<item name>",
 	--  			"nbt": "<item nbt>",
 	--  			"count": 12,
@@ -116,9 +123,9 @@ local function parseLogisticFile()
 	--  			],
 	--  		},
 	--  		{
-	--  			"name": "<item name>",
-	--  			"nbt": "<item nbt>",
-	--  			"count": 12,
+	--  			"fluid": true,
+	--  			"name": "<fluid name>",
+	--  			"amount": 1000, // mB
 	--  			"tags": [ // when tags exists, name can be ignored
 	--  				"<tag1>",
 	--  				"<tag2>",
@@ -178,12 +185,14 @@ local function pushItemFromItemList(source, target, itemList, itemIndex, limit)
 	local remain = limit
 	local thrs = {}
 	for j, pos in pairs(poses.l) do
-		if pos.count > remain then
+		if limit and pos.count > remain then
 			pos.count = pos.count - remain
 			local ct = transferItems(pos.slot, remain)
 			local ok = ct == remain
 			pushed = pushed + ct
-			remain = remain - ct
+			if limit then
+				remain = remain - ct
+			end
 			if not ok then
 				break
 			end
@@ -193,7 +202,9 @@ local function pushItemFromItemList(source, target, itemList, itemIndex, limit)
 			local ct = transferItems(pos.slot, pos.count)
 			local ok = ct == pos.count
 			pushed = pushed + ct
-			remain = remain - ct
+			if limit then
+				remain = remain - ct
+			end
 			if not ok then
 				break
 			end
@@ -202,9 +213,27 @@ local function pushItemFromItemList(source, target, itemList, itemIndex, limit)
 				break
 			end
 		end
-		if remain == 0 then
+		if limit and remain == 0 then
 			break
 		end
+	end
+	return pushed
+end
+
+local function pushFluidFromTankList(source, target, tankList, fluidName, amount)
+	local tank = tankList[fluidName]
+	local pushed
+	local srcInv = peripheral.wrap(source)
+	if srcInv.pushFluid then
+		pushed = srcInv.pushFluid(target, amount, fluidName)
+	else
+		local targetInv = peripheral.wrap(target)
+		pushed = targetInv.pullFluid(source, amount, fluidName)
+	end
+	if pushed >= tank.amount then
+		tankList[fluidName] = nil
+	else
+		tank.amount = tank.amount - pushed
 	end
 	return pushed
 end
@@ -239,28 +268,50 @@ local function pollInvs()
 		end
 		await(table.unpack(thrs))
 		thrs = { asleep(0.1) }
-		for source, tb in pairs(sourceInvs) do
-			local itemList = tb.list
-			for target, data in pairs(sources[source]) do
+		for source, targets in pairs(sources) do
+			local items, tanks = sourceInvs[source], sourceTanks[source]
+			local itemList, tankList = items and items.list or {}, tanks and tanks.list or {}
+			for target, data in pairs(targets) do
 				if peripheral.isPresent(target) then
 					if data.type == "inverse" then
 						local blocked = {}
 						for i, item in ipairs(data.list) do
 							blocked[itemIndexName(item)] = true
 						end
+						local flag = true
 						for ind, _ in pairs(itemList) do
 							if not blocked[ind] then
-								thrs[#thrs + 1] = operPool.queue(pushItemFromItemList, source, target, itemList, ind, 1)
+								thrs[#thrs + 1] = operPool.queue(pushItemFromItemList, source, target, itemList, ind)
+								flag = false
+								break
+							end
+						end
+						if flag then
+							for fluidName, _ in pairs(tankList) do
+								if not blocked[fluidName] then
+									thrs[#thrs + 1] = operPool.queue(pushFluidFromTankList, source, target, tankList, fluidName)
+									break
+								end
 							end
 						end
 					elseif data.type == "order" then
 						thrs[#thrs + 1] = operPool.queue(function(data)
 							for i, item in ipairs(data.list) do
-								local ind = itemIndexName(item)
-								if itemList[ind] then
-									local pushed = pushItemFromItemList(source, target, itemList, ind, item.count or 1)
-									if pushed > 0 then
-										break
+								if item.fluid then
+									local fluidName = item.name
+									if tankList[fluidName] then
+										local pushed = pushFluidFromTankList(source, target, tankList, fluidName, item.amount)
+										if pushed > 0 then
+											break
+										end
+									end
+								else
+									local ind = itemIndexName(item)
+									if itemList[ind] then
+										local pushed = pushItemFromItemList(source, target, itemList, ind, item.count)
+										if pushed > 0 then
+											break
+										end
 									end
 								end
 							end
@@ -268,21 +319,36 @@ local function pollInvs()
 					elseif data.type == "round" then
 						local i = 1
 						if data._last then
-							i = data._last + 1
+							i = data._last % #data.list + 1
 						end
 						local item = data.list[i]
-						local ind = itemIndexName(item)
-						if itemList[ind] then
-							thrs[#thrs + 1] = operPool.queue(pushItemFromItemList, source, target, itemList, ind, item.count or 1)
-							data._last = i
-							-- TODO: save last round index
+						if item.fluid then
+							local fluidName = item.name
+							if tankList[fluidName] then
+								thrs[#thrs + 1] = operPool.queue(pushFluidFromTankList, source, target, tankList, fluidName, item.amount)
+								data._last = i
+							end
+						else
+							local ind = itemIndexName(item)
+							if itemList[ind] then
+								thrs[#thrs + 1] = operPool.queue(pushItemFromItemList, source, target, itemList, ind, item.count)
+								data._last = i
+							end
 						end
+						-- TODO: save last round index
 					else -- if data.type == "random" then
 						local i = math.random(1, #data.list)
 						local item = data.list[i]
-						local ind = itemIndexName(item)
-						if itemList[ind] then
-							thrs[#thrs + 1] = operPool.queue(pushItemFromItemList, source, target, itemList, ind, item.count or 1)
+						if item.fluid then
+							local fluidName = item.name
+							if tankList[fluidName] then
+								thrs[#thrs + 1] = operPool.queue(pushFluidFromTankList, source, target, tankList, fluidName, item.amount)
+							end
+						else
+							local ind = itemIndexName(item)
+							if itemList[ind] then
+								thrs[#thrs + 1] = operPool.queue(pushItemFromItemList, source, target, itemList, ind, item.count)
+							end
 						end
 					end
 				end

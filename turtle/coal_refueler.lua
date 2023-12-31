@@ -1,6 +1,17 @@
 -- Coal Refueler
 -- by zyxkad@gmail.com
 
+local function selectItem(item)
+	for i = 1, 16 do
+		local detial = turtle.getItemDetail(i)
+		if (item == nil and detial == nil) or (item ~= nil and detial and detial.name == item) then
+			turtle.select(i)
+			return true
+		end
+	end
+	return false
+end
+
 function main(args)
 	local direction = args[1]
 	local suck, drop
@@ -23,20 +34,24 @@ function main(args)
 	print('Fuel left:', turtle.getFuelLevel())
 	print('Fueling...')
 	local ok = true
-	while turtle.getFuelLevel() < fuelLimit do
-		drop()
-		if not suck() then
+	if not selectItem(nil) then
+		printError('ERR: Cannot found an empty slot')
+		return
+	end
+	while true do
+		local need = math.min(math.ceil((fuelLimit - turtle.getFuelLevel()) / 8), 64)
+		if need <= 0 then
+			break
+		end
+		if not suck(need) and not suck(need) then
 			ok = false
-			printError('No coal left in the inventory')
+			printError('No coal left in the inventory, require', need)
 			break
 		end
 		turtle.refuel()
 		print('fuel level:', turtle.getFuelLevel(), '/', fuelLimit)
 	end
-	if ok then
-		-- don't keep the bucket
-		drop()
-	end
+	drop()
 	print('Fuel end:', turtle.getFuelLevel(), 'out of', fuelLimit)
 end
 

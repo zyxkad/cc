@@ -1,6 +1,13 @@
 -- GeoScanner Miner
 -- by zyxkad@gmail.com
--- NOTE: This program will interact with the right side
+--
+-- NOTE: This program will interact on the right side
+-- NOTE2: The position is relative to the turtle's home position
+
+local turtleLabel = os.getComputerLabel()
+if not turtleLabel then
+	error('Please use `label set <label>` give the miner a name')
+end
 
 local lps = require('lps')
 if not lps.init() then
@@ -11,22 +18,28 @@ if not lps.init() then
 	end
 end
 
+---- constants
 local pickaxeId = 'minecraft:diamond_pickaxe'
 local scannerId = 'advancedperipherals:geo_scanner'
+local enderWirelessModemId = 'computercraft:wireless_modem_advanced'
 local lavaBucketId = 'minecraft:lava_bucket'
 
--- 0 ~ 50
--- place at y = 50
-local maxLevel = -10
-local minLevel = -50
-local targetOre = '#minecraft:block/forge:ores/lead'
-local targetItems = {
-	['mekanism:raw_osmium'] = 1,
-	['mekanism:raw_lead'] = 1,
-	['immersiveengineering:raw_lead'] = 1,
+---- BEGIN CONFIG ----
+
+local maxLevel = -20
+local minLevel = -70
+local targetOres = {
+	['#minecraft:block/forge:ores/diamond'] = 10,
+	['#minecraft:block/forge:ores/redstone'] = 3,
+	['#minecraft:block/forge:ores/coal'] = 1,
 }
-local coalOre = '#minecraft:block/forge:ores/coal'
+local targetItems = {
+	['minecraft:redstone'] = 1,
+	['minecraft:diamond'] = 1,
+}
 local coalId = 'minecraft:coal'
+
+---- END CONFIG ----
 
 local posCacheName = '/geoPos.json'
 
@@ -199,7 +212,7 @@ local function hasFreeSlot()
 			c = c + 1
 		end
 	end
-	return c > 4
+	return c > 8
 end
 
 --- end utils
@@ -236,7 +249,7 @@ local function cleanInventory()
 					turtle.dropDown(detail.count)
 				end
 				flag = true
-			elseif not targetItems[name] and name ~= pickaxeId and name ~= scannerId and name ~= lavaBucketId then
+			elseif not targetItems[name] and name ~= pickaxeId and name ~= scannerId and name ~= enderWirelessModemId and name ~= lavaBucketId then
 				turtle.select(i)
 				turtle.dropDown(detail.count)
 			end
@@ -261,11 +274,11 @@ end
 
 local function scan()
 	print('Scanning...')
-	if peripheral.getType('right') ~= 'geoScanner' then
-		print('selecting item')
+	if not peripheral.hasType('right', 'geoScanner') then
+		print('Finding geoScanner')
 		if not selectItem(scannerId) then
-			print('scanner not found')
-			return nil, 'scanner not found'
+			printError('GeoScanner not found')
+			return nil, 'GeoScanner not found'
 		end
 		turtle.equipRight()
 	end
@@ -279,20 +292,13 @@ local function scan()
 		if minLevel <= y1 and y1 < maxLevel then
 			for _, t in pairs(d.tags) do
 				t = '#'..t
-				if t == targetOre then
+				local v = targetOres[t]
+				if v then
 					ores[#ores + 1] = {
 						x = x + d.x,
 						y = y + d.y,
 						z = z + d.z,
-						v = 2,
-					}
-					break
-				elseif t == coalOre then
-					ores[#ores + 1] = {
-						x = x + d.x,
-						y = y + d.y,
-						z = z + d.z,
-						v = 1,
+						v = v,
 					}
 					break
 				end
@@ -345,15 +351,38 @@ local function equipPickaxe()
 	end
 end
 
+local function broadcastPosition()
+	if not peripheral.hasType('right', 'modem') then
+		if not selectItem(enderWirelessModemId) then
+			return false
+		end
+		turtle.equipRight()
+	end
+	rednet.open('right')
+	local x, y, z = lps.locate()
+	rednet.broadcast({
+		name = turtleLabel,
+		x = x,
+		y = y,
+		z = z,
+		fuel = turtle.getFuelLevel(),
+	}, 'turtle_geo_miner')
+	turtle.equipRight()
+end
+
 local function scanAndDig()
-	equipPickaxe()
 	while true do
-		local ores = scan()
+		broadcastPosition()
+		equipPickaxe()
+		local ores, err = scan()
+		if not ores then
+			return false, err
+		end
 		print('Found '..#ores..' ores')
 		if #ores == 0 then
 			for i = 1, 8 do
 				if not check() then
-					return
+					return true
 				end
 				digForwardIfExists()
 			end
@@ -364,14 +393,14 @@ local function scanAndDig()
 				fd.write(textutils.serialiseJSON({x, y, z}))
 				fd.close()
 			end
-			return
+			return true
 		elseif not hasFreeSlot() then
 			cleanInventory()
 			if not hasFreeSlot() then
 				local fd = fs.open(posCacheName, 'w')
 				fd.write(textutils.serialiseJSON({x, y, z}))
 				fd.close()
-				return
+				return true
 			end
 		end
 	end
@@ -411,19 +440,43 @@ local function goHome()
 	print('Arrived home!')
 end
 
+local function doWithBroadcastPos(fn, ...)
+	local args = table.pack(...)
+	local res
+	parallel.waitForAny(function()
+		res = fn(table.unpack(args, 1, args.n))
+	end, function()
+		while true do
+			broadcastPosition()
+			sleep(10)
+		end
+	end)
+	return res
+end
+
+local function refuel()
+	shell.run('coal_refueler')
+	if turtle.getFuelLevel() * 2 < limit then
+		return false
+	end
+	return true
+end
+
 function main(args)
+	sleep(3)
 	while true do
-		turnTo('+x')
-		shell.run('lava_refueler')
 		local fd = fs.open(posCacheName, 'r')
 		local flag = false
 		if fd then
 			local last = textutils.unserialiseJSON(fd.readAll())
 			fd.close()
 			if last then
-				while not goPos(last.x, last.y, last.z) do
-					goHome()
-					shell.run('lava_refueler')
+				while not doWithBroadcastPos(goPos, last.x, last.y, last.z) do
+					doWithBroadcastPos(goHome)
+					if not refuel() then
+						printError('Refuel failed')
+						return
+					end
 					flag = true
 				end
 				fs.delete(posCacheName)
@@ -432,13 +485,16 @@ function main(args)
 		if not flag then
 			local y = math.random(minLevel, maxLevel)
 			turnTo(({'+x', '-x', '+z', '-z'})[math.random(1, 4)])
-			while not goPos(nil, y, nil) do
-				goHome()
-				shell.run('lava_refueler')
+			while not doWithBroadcastPos(goPos, nil, y, nil) do
+				doWithBroadcastPos(goHome)
+				if not refuel() then
+					printError('Refuel failed')
+					return
+				end
 			end
 		end
 		scanAndDig()
-		goHome()
+		doWithBroadcastPos(goHome)
 		for i = 1, 16 do
 			local detail = turtle.getItemDetail(i)
 			if detail then
@@ -447,7 +503,7 @@ function main(args)
 					turtle.select(i)
 					turtle.refuel(detail.count)
 				end
-				if item ~= pickaxeId and item ~= scannerId and item ~= lavaBucketId then
+				if item ~= pickaxeId and item ~= scannerId and item ~= lavaBucketId and item ~= enderWirelessModemId then
 					turtle.select(i)
 					local p = targetItems[item]
 					if p then
@@ -458,6 +514,7 @@ function main(args)
 				end
 			end
 		end
+		refuel()
 	end
 end
 

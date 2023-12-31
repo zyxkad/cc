@@ -13,4 +13,12 @@ function exports.onclick(event)
 	print('onclick:', event)
 end
 
+function exports.onInputChanged(event)
+	print('onInputChanged:', event)
+end
+
+function exports.onSaveInput(event)
+	print('onSaveInput:', event)
+end
+
 return exports

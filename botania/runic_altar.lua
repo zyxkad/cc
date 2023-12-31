@@ -1,7 +1,6 @@
--- Botania Runic Altar Autocrafting
+-- Botania Runic Altar Autocrafting (Upper part)
 -- by zyxkad@gmail.com
 
-local core = assert(peripheral.find('weakAutomata'), 'No automata core installed')
 local wandId = 'botania:twig_wand'
 
 local function doUntil(c, failed, max)
@@ -20,8 +19,8 @@ end
 
 local function selectItem(item)
 	for i = 1, 16 do
-		local detial = turtle.getItemDetail(i)
-		if detial and detial.name == item then
+		local detail = turtle.getItemDetail(i)
+		if detail and detail.name == item then
 			turtle.select(i)
 			return true
 		end
@@ -33,7 +32,7 @@ local function searchNonEmpty()
 	for i = 1, 16 do
 		local detail = turtle.getItemDetail(i)
 		if detail ~= nil and detail.name ~= wandId then
-			return i
+			return i, detail.name
 		end
 	end
 	return nil
@@ -41,29 +40,46 @@ end
 
 local function searchAndDropAll()
 	local count = 0
-	while count < 10 do -- wait for 1s
-		local i = searchNonEmpty()
+	local livingRock = nil
+	while count < 10 or not livingRock do -- wait for 1s
+		local i, name = searchNonEmpty()
 		if i then
-			turtle.select(i)
-			turtle.drop()
-			count = 0
+			if name == 'botania:livingrock' then
+				if not livingRock then
+					livingRock = i
+					count = 0
+				else
+					count = count + 1
+					sleep(0.1)
+				end
+			else
+				turtle.select(i)
+				turtle.drop()
+				count = 0
+			end
 		else
 			count = count + 1
 			sleep(0.1)
 		end
 	end
+	return livingRock
 end
 
 local function craft()
-	print('Crafting ...')
-	searchAndDropAll()
+	redstone.setOutput('front', true)
+	print('Dropping materials ...')
+	local livingRock = searchAndDropAll()
+	print('Waiting for alter ready ...')
 	repeat sleep(0.2) until redstone.getInput('right')
-	redstone.setOutput('top', true)
+	turtle.select(livingRock)
+	turtle.drop()
 	sleep(1)
-	redstone.setOutput('top', false)
-	print('Finding '..wandId)
-	doUntil(function() return selectItem(wandId) end)
-	doUntil(function() return pcall(core.useOnBlock) end)
+	redstone.setOutput('front', false)
+	-- trigger wand
+	print('Triggering wand ...')
+	redstone.setOutput('bottom', true)
+	repeat sleep(0.1) until redstone.getInput('bottom')
+	redstone.setOutput('bottom', false)
 	print('Done!')
 end
 
@@ -71,9 +87,11 @@ function main()
 	while true do
 		if searchNonEmpty() then
 			craft()
+			-- we have to wait the cooldown for the runic altar
+			sleep(5)
+		else
+			sleep(0.1)
 		end
-		-- we have to wait the cooldown for the runic altar
-		sleep(3)
 	end
 end
 

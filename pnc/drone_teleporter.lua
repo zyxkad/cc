@@ -78,7 +78,11 @@ local function getPlayerPos(player)
 	if x == 0 and y == 0 and z == 0 then
 		return nil, 'Player is not online'
 	end
-	return x, y, z
+	return {
+		x=x,
+		y=y,
+		z=z,
+	}
 end
 
 local function spawnDrone()
@@ -255,33 +259,33 @@ while true do
 	local _, sender, msg = os.pullEvent('chat')
 	if msg == '.tp' then
 		chatBox.sendFormattedMessage(textutils.serialiseJSON({
-		text = '',
-		extra = {
-			{
-				text = 'Recevied a waypoint from ',
-			},
-			{
-				text = sender,
-				color = 'yellow',
-				clickEvent = {
-					action = 'suggest_command',
-					value = sender,
+			text = '',
+			extra = {
+				{
+					text = 'Recevied a waypoint from ',
 				},
-			},
-			{
-				text = string.format(' (%s)[%d %d %d]', name, x, y, z),
-				color = 'aqua',
-				underlined = true,
-				clickEvent = {
-					action = 'suggest_command',
-					value = string.format('.tp3 ', x, y, z),
+				{
+					text = sender,
+					color = 'yellow',
+					clickEvent = {
+						action = 'suggest_command',
+						value = sender,
+					},
 				},
-				hoverEvent = {
-					action = 'show_text',
-					value = '.tp3',
-				},
+				{
+					text = string.format(' (%s)[%d %d %d]', name, x, y, z),
+					color = 'aqua',
+					underlined = true,
+					clickEvent = {
+						action = 'suggest_command',
+						value = string.format('.tp3 ', x, y, z),
+					},
+					hoverEvent = {
+						action = 'show_text',
+						value = '.tp3',
+					},
+				}
 			}
-		}
 		}), 'DT')
 	elseif msg == '.tp2' then
 		sendError('Usage: .tp2 <player>', sender)

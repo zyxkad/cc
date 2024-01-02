@@ -26,14 +26,16 @@ local lavaBucketId = 'minecraft:lava_bucket'
 
 ---- BEGIN CONFIG ----
 
-local maxLevel = -20
-local minLevel = -70
+local maxLevel = -48
+local minLevel = -62
 local targetOres = {
+	['#minecraft:block/forge:ores/netherite_scrap'] = 100,
 	['#minecraft:block/forge:ores/diamond'] = 10,
 	['#minecraft:block/forge:ores/redstone'] = 3,
 	['#minecraft:block/forge:ores/coal'] = 1,
 }
 local targetItems = {
+	['minecraft:ancient_debris'] = 1,
 	['minecraft:redstone'] = 1,
 	['minecraft:diamond'] = 1,
 }
@@ -212,7 +214,7 @@ local function hasFreeSlot()
 			c = c + 1
 		end
 	end
-	return c > 8
+	return c > 10
 end
 
 --- end utils
@@ -352,25 +354,33 @@ local function equipPickaxe()
 end
 
 local function broadcastPosition()
-	if not peripheral.hasType('right', 'modem') then
-		if not selectItem(enderWirelessModemId) then
-			return false
+	while true do
+		if not peripheral.hasType('right', 'modem') then
+			if not selectItem(enderWirelessModemId) then
+				return false
+			end
+			turtle.equipRight()
 		end
-		turtle.equipRight()
+		if pcall(rednet.open, 'right') then
+			local x, y, z = lps.locate()
+			rednet.broadcast({
+				name = turtleLabel,
+				x = x,
+				y = y,
+				z = z,
+				fuel = turtle.getFuelLevel(),
+			}, 'turtle_geo_miner')
+			turtle.equipRight()
+			return
+		end
+		sleep(0)
 	end
-	rednet.open('right')
-	local x, y, z = lps.locate()
-	rednet.broadcast({
-		name = turtleLabel,
-		x = x,
-		y = y,
-		z = z,
-		fuel = turtle.getFuelLevel(),
-	}, 'turtle_geo_miner')
-	turtle.equipRight()
 end
 
 local function scanAndDig()
+	local start = os.clock()
+	local maxMiningTime = 60 * 60
+	local deadline = start + maxMiningTime
 	while true do
 		broadcastPosition()
 		equipPickaxe()
@@ -380,7 +390,7 @@ local function scanAndDig()
 		end
 		print('Found '..#ores..' ores')
 		if #ores == 0 then
-			for i = 1, 8 do
+			for i = 1, 16 do
 				if not check() then
 					return true
 				end
@@ -394,7 +404,7 @@ local function scanAndDig()
 				fd.close()
 			end
 			return true
-		elseif not hasFreeSlot() then
+		elseif os.clock() > deadline or not hasFreeSlot() then
 			cleanInventory()
 			if not hasFreeSlot() then
 				local fd = fs.open(posCacheName, 'w')

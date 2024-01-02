@@ -125,7 +125,7 @@ end
 
 local function tp2(sender, arg)
 	if enable_whitelist and not inList(whitelist, sender) then
-		return false, 'You are not in the whitelist, contact <ckupen> or <zyxkad#4421> in discord to get whitelist'
+		return false, 'You are not in the whitelist, contact <ckupen> in discord to get whitelist'
 	end
 	local target = arg
 	if target == sender then
@@ -152,7 +152,7 @@ end
 
 local function tp3(sender, arg)
 	if enable_whitelist and not inList(whitelist, sender) then
-		return false, "You are not in the whitelist, contact <ckupen> or <zyxkad#4421> in discord to get whitelist"
+		return false, "You are not in the whitelist, contact <ckupen> in discord to get whitelist"
 	end
 	local x, y, z
 	local i = arg:find(' ')
@@ -257,36 +257,11 @@ while true do
 		drone.exitPiece()
 	end
 	local _, sender, msg = os.pullEvent('chat')
-	if msg == '.tp' then
-		chatBox.sendFormattedMessage(textutils.serialiseJSON({
-			text = '',
-			extra = {
-				{
-					text = 'Recevied a waypoint from ',
-				},
-				{
-					text = sender,
-					color = 'yellow',
-					clickEvent = {
-						action = 'suggest_command',
-						value = sender,
-					},
-				},
-				{
-					text = string.format(' (%s)[%d %d %d]', name, x, y, z),
-					color = 'aqua',
-					underlined = true,
-					clickEvent = {
-						action = 'suggest_command',
-						value = string.format('.tp3 ', x, y, z),
-					},
-					hoverEvent = {
-						action = 'show_text',
-						value = '.tp3',
-					},
-				}
-			}
-		}), 'DT')
+	if msg == '.tp' or hadPrefix(msg, '.tp ') then
+		chatBox.sendMessageToPlayer([[Usage:
+	.tp2 <player> : teleport to player
+	.tp3 <x> <y> <z> : teleport to position
+	.warp <name> : teleport to a landmark (only hardcoded "spawn" rn)]], sender)
 	elseif msg == '.tp2' then
 		sendError('Usage: .tp2 <player>', sender)
 	elseif hadPrefix(msg, '.tp2 ') then
@@ -302,6 +277,7 @@ while true do
 			sendError(err, sender)
 		end
 	elseif msg == '.warp' then
+		sendError('Usage: .warp <name>', sender)
 	elseif hadPrefix(msg, '.warp ') then
 		local ok, err = warp(sender, msg:sub(7))
 		if not ok and err then

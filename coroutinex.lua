@@ -25,6 +25,7 @@ end
 
 local function asThreads(...)
 	local threads = {...}
+	setmetatable(threads, { __mode = 'k' })
 	for i, fn in ipairs(threads) do
 		local typ = type(fn)
 		if typ == 'function' then
@@ -153,6 +154,8 @@ local function main(...)
 	local mainThreads = {}
 	local eventListeners = {}
 
+	setmetatable(routines, { __mode = 'k' }) -- try avoid thread key leak issue
+
 	for i, fn in ipairs({...}) do
 		if type(fn) == 'table' then
 			assert(type(fn.event) == 'string')
@@ -176,9 +179,8 @@ local function main(...)
 	local internalEvents = {}
 	local eventFilter = {}
 	local eventData = { n = 0 }
-	local instantResume = false
 	while true do
-		instantResume = false
+		local instantResume = false
 		local keepLoop = false
 		local eventType = eventData[1]
 		for i, r in pairs(routines) do
@@ -283,6 +285,8 @@ local function newThreadPool(limit)
 	local running = {}
 	local waiting = {}
 	local pool = {}
+
+	setmetatable(running, { __mode = 'k' })	
 
 	pool.running = function() return count end
 	pool.limit = function() return limit end

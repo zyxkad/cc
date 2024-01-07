@@ -3,6 +3,8 @@
 
 ---- BEGIN CONFIG ----
 
+local chatRunCommand = true and 'run_command' or 'suggest_command'
+
 local function split(s, sep)
 	local i, j = string.find(s, sep, 1, true)
 	if not i then
@@ -115,7 +117,7 @@ local function pollChatbox()
 end
 
 local function queryStorage()
-	return network.broadcast('query-storage', nil, 5)
+	return network.broadcast('query-storage', nil, 3)
 end
 
 local function countedToSorted(counted, sortFn)
@@ -232,14 +234,13 @@ local function pollData()
 		return counted, totalSlots, usedSlots, actualSlots
 	end
 
-	queriedData = queryStorage()
-	counted, totalSlots, usedSlots, actualSlots = addupCounts(queriedData)
-	sortedByNum = countedToSorted(counted, function(a, b)
-		return a.count > b.count or (a.count == b.count and a.name < b.name)
+	co_run(function()
+		for id, payload in queryStorage() do
+			updated = true
+			queriedData[id] = payload
+		end
 	end)
-	sortedByName = countedToSorted(counted, function(a, b)
-		return a.name < b.name or (a.name == b.name and a.count > b.count)
-	end)
+
 	while true do
 		sleep(1)
 		if updated then
@@ -293,6 +294,27 @@ local function render()
 	end
 end
 
+local function filterItem(pattern, page, sorted)
+	local filtered = {}
+	local MAX_COUNT = 17
+	pattern = pattern:lower()
+	local ct = 0
+	local p = 1
+	for _, data in ipairs(sorted) do
+		if #pattern == 0 or data.name:lower():find(pattern) or data.displayName:lower():find(pattern) then
+			if ct >= MAX_COUNT then
+				ct = 0
+				p = p + 1
+			end
+			ct = ct + 1
+			if p == page then
+				filtered[ct] = data
+			end
+		end
+	end
+	return filtered, p
+end
+
 local CHAT_NAME = '§eCC Storage Terminal§r'
 local CHAT_HEAD = '§a============== §e§lCC Storage Terminal§r§a ==============='
 local CHAT_WIDTH = 53
@@ -318,76 +340,157 @@ local function onCommand(cfgData, player, msg)
 				contents = {
 					id = item.name,
 					count = item.count,
-					nbt = item.nbt,
+					nbt = textutils.serialiseJSON(item.nbt, { nbt_style=true }),
 				},
 			},
 		}), player, '<>')
-	elseif msg == '.query' or startswith(msg, '.query ') then
-		local param = msg:sub(#'.query ' + 1):lower()
+	elseif msg == '.query' or startswith(msg, '.query ') or msg == '.q' or startswith(msg, '.q ') or startswith(msg, '.query-page ') then
+		local param = ''
+		local queryPage = 1
+		if startswith(msg, '.query-page ') then
+			local follow = msg:sub(#'.query-page ' + 1)
+			local i, j = follow:find('%s+')
+			if i then
+				queryPage = tonumber(follow:sub(1, i - 1)) or 1
+				param = follow:sub(j + 1)
+			else
+				queryPage = tonumber(follow) or 1
+			end
+		else
+			param = msg:sub(#'.query ' + 1)
+		end
 		local reply = {}
-		local sorted = sortedByNum
-		local ct = 0
-		for i, data in ipairs(sorted) do
-			if #param == 0 or data.name:lower():find(param) or data.displayName:lower():find(param) then
-				ct = ct + 1
-				if ct >= 95 then
-					break
-				end
-				local takeId = data.name
-				if data.nbt then
-					takeId = takeId .. ';' .. data.nbt
-				end
-				reply[#reply + 1] = {
-					text = '\n',
-				}
-				reply[#reply + 1] = {
-					text = '[-]',
-					color = 'red',
-					underlined = true,
-					clickEvent = {
-						action = 'suggest_command',
-						value = '$.take ' .. takeId .. ' ',
-					},
-					hoverEvent = {
-						action = 'show_text',
-						value = 'Click to take item',
-					}
-				}
-				reply[#reply + 1] = {
-					text = ' ',
-				}
-				reply[#reply + 1] = {
-					text = string.format('%d * ', data.count),
-					clickEvent = {
-						action = 'copy_to_clipboard',
-						value = takeId,
-					},
-					extra = {
-						{
-							-- Three space will show the item icon
-							text = string.format('   [%s]', data.displayName:sub(1, 32)),
-							color = 'aqua',
-							hoverEvent = {
-								action = 'show_item',
-								contents = {
-									id = data.name,
-									count = data.count,
-								},
+		local filtered, totalPage = filterItem(param, queryPage, sortedByNum)
+		for _, data in ipairs(filtered) do
+			local takeId = data.name
+			if data.nbt then
+				takeId = takeId .. ';' .. data.nbt
+			end
+			reply[#reply + 1] = {
+				text = '\n',
+			}
+			reply[#reply + 1] = {
+				text = '[-]',
+				color = 'red',
+				underlined = true,
+				clickEvent = {
+					action = 'suggest_command',
+					value = '$.take ' .. takeId .. ' ',
+				},
+				hoverEvent = {
+					action = 'show_text',
+					value = 'Click to take item',
+				},
+			}
+			reply[#reply + 1] = {
+				text = ' ',
+			}
+			reply[#reply + 1] = {
+				text = string.format('%d * ', data.count),
+				clickEvent = {
+					action = 'copy_to_clipboard',
+					value = takeId,
+				},
+				extra = {
+					{
+						-- Three space will show the item icon
+						text = string.format('   [%s]', data.displayName:sub(1, 32)),
+						color = 'aqua',
+						hoverEvent = {
+							action = 'show_item',
+							contents = {
+								id = data.name,
+								count = data.count,
 							},
 						},
-					}
-				}
-			end
+					},
+				},
+			}
 		end
-		reply[#reply + 1] = {
-			text = '\n' .. string.format('Found %d results', ct),
-		}
 		reply[#reply + 1] = {
 			text = '\n' .. string.format('Usage: %.1f%% %.1f / %d / %d', actualSlots / totalSlots * 100, usedSlots, actualSlots, totalSlots),
 		}
 		reply[#reply + 1] = {
-			text = '\n' .. string.rep('=', CHAT_WIDTH),
-			color = 'green',
+			text = '\n',
+			extra = {
+				{
+					text = '=================',
+					color = 'green',
+				},
+				{
+					text = ' ',
+				},
+				(
+					queryPage <= 1 and
+					{
+						text = '<',
+						color = 'gray',
+						underlined = true,
+						hoverEvent = {
+							action = 'show_text',
+							value = 'No further page',
+						},
+					} or {
+						text = '<',
+						color = 'yellow',
+						underlined = true,
+						clickEvent = {
+							action = chatRunCommand,
+							value = string.format('$.query-page %d %s', queryPage - 1, param),
+						},
+						hoverEvent = {
+							action = 'show_text',
+							value = 'Show previous page',
+						},
+					}
+				),
+				{
+					text = '  ',
+				},
+				{
+					text = string.format('%02d', queryPage),
+				},
+				{
+					text = ' / ',
+				},
+				{
+					text = string.format('%02d', totalPage),
+				},
+				{
+					text = '  ',
+				},
+				(
+					queryPage >= totalPage and
+					{
+						text = '>',
+						color = 'gray',
+						underlined = true,
+						hoverEvent = {
+							action = 'show_text',
+							value = 'No further page',
+						},
+					} or {
+						text = '>',
+						color = 'yellow',
+						underlined = true,
+						clickEvent = {
+							action = chatRunCommand,
+							value = string.format('$.query-page %d %s', queryPage + 1, param),
+						},
+						hoverEvent = {
+							action = 'show_text',
+							value = 'Show next page',
+						},
+					}
+				),
+				{
+					text = ' ',
+				},
+				{
+					text = '=================',
+					color = 'green',
+				},
+			},
 		}
 		pollChatbox().sendFormattedMessageToPlayer(textutils.serialiseJSON({
 			text = '',
@@ -550,6 +653,7 @@ local function onCommand(cfgData, player, msg)
 		pollChatbox().sendMessageToPlayer(string.format('Sending slot %d', slot), player, CHAT_NAME, '##', '§a')
 		cfgData.manager.removeItemFromPlayerNBT(cfgData.cacheSide, count, nil, { fromSlot=slot })
 		putToStorage(cfgData)
+	elseif msg == '.plist' or startswith(msg, '.plist ') then
 	end
 end
 

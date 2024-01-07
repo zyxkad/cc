@@ -160,6 +160,9 @@ local function timedParseLogisticFile()
 	while true do
 		local event, p1 = os.pullEvent()
 		if event == 'timer' and p1 == timerId or event == '_parse_logistic' then
+			if event == '_parse_logistic' then
+				os.cancelTimer(timerId)
+			end
 			local s = parseLogisticFile()
 			sources = s
 			timerId = os.startTimer(60)

@@ -3,8 +3,6 @@
 
 local BROADCAST_CHANNEL = 65522
 
--- local modem = peripheral.find('modem', function(_, modem) return peripheral.hasType(modem, 'peripheral_hub') end)
-
 local started = false
 local localId = os.getComputerID()
 local localType = nil
@@ -108,9 +106,11 @@ local function send(target, command, payload, hasReply, replyTimeout)
 				 type(message.hostId) == 'number' and message.hostId == target and
 				 type(message.targetId) == 'number' and message.targetId == localId and
 				 type(message.reply) == 'number' and message.reply == id then
-				local payload = message.payload
+				if replyTimeout then
+					os.cancelTimer(timerId)
+				end
 				messages[id] = nil
-				return true, payload
+				return true, message.payload
 			end
 		elseif event == 'timer' and p1 == timerId then
 			messages[id] = nil
@@ -134,6 +134,7 @@ local function broadcast(command, payload, replyTimeout, singleReply)
 	end
 
 	transmit(BROADCAST_CHANNEL, localReplyCh, {
+		id = id,
 		cmd = command,
 		hostType = localType,
 		hostId = localId,
@@ -145,8 +146,40 @@ local function broadcast(command, payload, replyTimeout, singleReply)
 	end
 
 	local timerId = os.startTimer(replyTimeout)
-	local replies = {}
-	while true do
+	local deadLine = os.clock() + replyTimeout
+	local closed = false
+
+	if singleReply then
+		while true do
+			local event, p1, p2, p3, p4 = os.pullEvent()
+			if event == 'modem_message' then
+				local fromModem, sendCh, replyCh, message = p1, p2, p3, p4
+				if openedModems[fromModem] and sendCh == localReplyCh and
+					 type(message) == 'table' and type(message.hostId) == 'number' and
+					 type(message.cmd) == 'string' and message.cmd == command and
+					 type(message.targetId) == 'number' and message.targetId == localId and
+					 type(message.reply) == 'number' and message.reply == id then
+					os.cancelTimer(timerId)
+					messages[id] = nil
+					return message.hostId, message.payload
+				end
+			elseif event == 'timer' and p1 == timerId then
+				break
+			end
+		end
+		messages[id] = nil
+		return nil
+	end
+
+	return function()
+		if closed then
+			error('Trying to read from a closed iterator', 1)
+		end
+		if os.clock() > deadLine then
+			closed = true
+			os.cancelTimer(timerId)
+			return nil
+		end
 		local event, p1, p2, p3, p4 = os.pullEvent()
 		if event == 'modem_message' then
 			local fromModem, sendCh, replyCh, message = p1, p2, p3, p4
@@ -155,19 +188,14 @@ local function broadcast(command, payload, replyTimeout, singleReply)
 				 type(message.cmd) == 'string' and message.cmd == command and
 				 type(message.targetId) == 'number' and message.targetId == localId and
 				 type(message.reply) == 'number' and message.reply == id then
-				local payload = message.payload
-				if singleReply then
-					messages[id] = nil
-					return message.hostId, payload
-				end
-				replies[message.hostId] = payload
+				return message.hostId, message.payload
 			end
 		elseif event == 'timer' and p1 == timerId then
-			break
+			closed = true
+			messages[id] = nil
+			return nil
 		end
 	end
-	messages[id] = nil
-	return replies
 end
 
 local function _reply(command, target, replyCh, messageId, payload)

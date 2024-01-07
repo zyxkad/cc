@@ -1,4 +1,5 @@
 -- coroutine extra
+-- simulate JavaScript async process in lua
 -- by zyxkad@gmail.com
 
 local function current()
@@ -25,7 +26,6 @@ end
 
 local function asThreads(...)
 	local threads = {...}
-	setmetatable(threads, { __mode = 'k' })
 	for i, fn in ipairs(threads) do
 		local typ = type(fn)
 		if typ == 'function' then
@@ -285,8 +285,6 @@ local function newThreadPool(limit)
 	local running = {}
 	local waiting = {}
 	local pool = {}
-
-	setmetatable(running, { __mode = 'k' })	
 
 	pool.running = function() return count end
 	pool.limit = function() return limit end

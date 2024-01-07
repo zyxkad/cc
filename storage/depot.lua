@@ -105,10 +105,13 @@ end
 
 local invLock = crx.newLock()
 local invData = nil
+local itemDetailCache = {}
 
 local function pollInvLists()
 	local pool = crx.newThreadPool(100)
 	while true do
+		local start = os.epoch('utc')
+
 		invLock.rLock()
 		local countedLc = {}
 		local totalSt = 0
@@ -129,43 +132,76 @@ local function pollInvLists()
 
 				for slot, item in pairs(list) do
 					local ind = itemIndexName(item)
-					local cacheSlot = resCache[ind]
-					if cacheSlot then
-						defers[item] = cacheSlot
+					local detail = itemDetailCache[ind]
+					if detail then
+						item.displayName = detail.displayName
+						item.maxCount = detail.maxCount
+						usedSt = usedSt + item.count / detail.maxCount
+						actualSt = actualSt + 1
 						local c = countedLc[ind]
-						c.count = c.count + item.count
-						c.usedSlot = c.usedSlot + 1
-						c.positions[#c.positions + 1] = {
-							inv = invName,
-							slot = slot,
-							count = item.count,
-						}
-					else
-						resCache[ind] = item
-						countedLc[ind] = {
-							count = item.count,
-							usedSlot = 1,
-							positions = {
-								{
-									inv = invName,
-									slot = slot,
-									count = item.count,
+						if c then
+							c.count = c.count + item.count
+							c.usedSlot = c.usedSlot + 1
+							c.positions[#c.positions + 1] = {
+								inv = invName,
+								slot = slot,
+								count = item.count,
+							}
+						else
+							countedLc[ind] = {
+								count = item.count,
+								usedSlot = 1,
+								displayName = detail.displayName,
+								maxCount = detail.maxCount,
+								positions = {
+									{
+										inv = invName,
+										slot = slot,
+										count = item.count,
+									},
 								},
-							},
-						}
-						ths[#ths + 1] = pool.queue(function(item, p, slot)
-							local details = p.getItemDetail(slot)
-							if not details then
-								error(string.format('slot: %s/%d does not exists', invName, slot))
-							end
-							item.displayName = details.displayName
-							item.maxCount = details.maxCount
-							usedSt = usedSt + item.count / item.maxCount
-							actualSt = actualSt + 1
+							}
+						end
+					else
+						local cacheSlot = resCache[ind]
+						if cacheSlot then
+							defers[item] = cacheSlot
 							local c = countedLc[ind]
-							c.displayName = item.displayName
-							c.maxCount = item.maxCount
-						end, item, inv.p, slot)
+							c.count = c.count + item.count
+							c.usedSlot = c.usedSlot + 1
+							c.positions[#c.positions + 1] = {
+								inv = invName,
+								slot = slot,
+								count = item.count,
+							}
+						else
+							resCache[ind] = item
+							countedLc[ind] = {
+								count = item.count,
+								usedSlot = 1,
+								positions = {
+									{
+										inv = invName,
+										slot = slot,
+										count = item.count,
+									},
+								},
+							}
+							ths[#ths + 1] = pool.queue(function(item, p, slot)
+								local detail = p.getItemDetail(slot)
+								if not detail then
+									error(string.format('slot: %s/%d does not exists', invName, slot))
+								end
+								itemDetailCache[ind] = detail
+								item.displayName = detail.displayName
+								item.maxCount = detail.maxCount
+								usedSt = usedSt + item.count / item.maxCount
+								actualSt = actualSt + 1
+								local c = countedLc[ind]
+								c.displayName = item.displayName
+								c.maxCount = item.maxCount
+							end, item, inv.p, slot)
+						end
 					end
 				end
 				await(table.unpack(ths))
@@ -175,7 +211,6 @@ local function pollInvLists()
 		end
 
 		pool.waitForAll()
-		print('poll done', os.clock())
 		invLock.rUnlock()
 
 		for item, details in pairs(defers) do
@@ -184,6 +219,9 @@ local function pollInvLists()
 			usedSt = usedSt + item.count / item.maxCount
 			actualSt = actualSt + 1
 		end
+
+		local now = os.epoch('utc')
+		print('poll done', os.clock(), 'used', (now - start) / 1000)
 
 		counted = countedLc
 		invData = {

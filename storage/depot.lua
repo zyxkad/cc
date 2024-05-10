@@ -119,8 +119,9 @@ local function pollInvLists()
 		local actualSt = 0
 		local resCache = {}
 		local defers = {}
+		local thrs = {}
 		for invName, inv in pairs(inventories) do
-			pool.queue(function(inv, invName)
+			thrs[#thrs + 1] = co_run(function(inv, invName)
 				local ths = {}
 				local size, list
 				await(pool.queue(function()
@@ -210,7 +211,7 @@ local function pollInvLists()
 			end, inv, invName)
 		end
 
-		pool.waitForAll()
+		await(table.unpack(thrs))
 		invLock.rUnlock()
 
 		for item, details in pairs(defers) do

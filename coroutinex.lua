@@ -1,48 +1,99 @@
 -- coroutine extra
--- simulate JavaScript async process in lua
+-- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
-local function current()
-	return coroutine.yield('/current')
+local EMPTY_TABLE = {}
+
+local function execute(command, ...)
+	assert(type(command) == 'string')
+	return coroutine.yield(nil, command, ...)
 end
 
-local function run(fn, ...)
-	if type(fn) == 'thread' then
-		assert(#{...} == 0, 'thread cannot have any argument')
-	else
-		assert(type(fn) == 'function', 'Argument #1(fn) must be a function or a coroutine thread')
+local Promise = {
+	PENDING   = 0,
+	FULFILLED = 1,
+	REJECTED  = 2,
+
+	-- _native = nil, -- thread
+	-- _result = nil, -- table list or error
+	-- _status = Promise.PENDING, -- PENDING, FULFILLED, or REJECTED
+	-- _runon  = nil, -- an address represent which base routine is it running on
+}
+
+function Promise.__index(pm, key)
+	if key == 'native' then
+		return pm._native
+	elseif key == 'result' then
+		return pm._result
+	elseif key == 'status' then
+		return pm._status
 	end
-	local thr = coroutine.yield('/run', fn, ...)
-	return thr
+	return Promise[key]
+end
+
+local function newPromise(thread)
+	assert(type(thread) == 'thread')
+	if coroutine.status(thread) == 'dead' then
+		error('Cannot wrap a dead thread as promise', 2)
+	end
+	local pm = {}
+	setmetatable(pm, Promise)
+	pm._native = thread
+	pm._status = Promise.PENDING
+	return pm
+end
+
+local function isPromise(pm)
+	return type(pm) == 'table' and getmetatable(pm) == Promise
+end
+
+local function current()
+	return execute('/current')
+end
+
+local function run(pm, ...)
+	if type(pm) == 'function' then
+		local fn, args = pm, table.pack(...)
+		pm = newPromise(coroutine.create(function() return fn(table.unpack(args, 1, args.n)) end))
+	elseif type(pm) == 'thread' then
+		pm = newPromise(pm)
+	elseif not isPromise(pm) then
+		error('Argument #1 must be function, thread, or promise, but got ' .. type(pm), 1)
+	end
+	local err = execute('/run', pm)
+	if err then
+		error(err, 1)
+	end
+	return pm
 end
 
 local function exit(...)
-	coroutine.yield('/exit', ...)
+	execute('/exit', ...)
 end
 
+-- asleep(n) is an alias of `run(sleep, n)`
 local function asleep(n)
 	return run(sleep, n)
 end
 
-local function asThreads(...)
+local function asPromises(...)
 	local threads = {...}
-	for i, fn in ipairs(threads) do
-		local typ = type(fn)
-		if typ == 'function' then
-			local t = run(fn)
-			threads[i] = t
-			threads[t] = i
-		elseif typ ~= 'thread' then
-			error(string.format('Argument #%d is %s, expect a coroutine thread or a function',
-				i, typ), 2)
+	for i, thr in ipairs(threads) do
+		local typ = type(thr)
+		if typ == 'function' or typ == 'thread' then
+			local pm = run(thr)
+			threads[i] = pm
+			threads[pm] = i
+		elseif isPromise(thr) then
+			threads[thr] = i
 		else
-			threads[fn] = i
+			error(string.format('Argument #%d is %s, expect function, thread, or promise', i, typ), 2)
 		end
 	end
 	return threads
 end
 
-local eventCoroutineDone = '#cox_thr_done'
+local eventCoroutineDone = '#crx_thr_done'
 
 local function newThreadErr(id, value)
 	local err = {
@@ -59,19 +110,20 @@ end
 
 -- wait all threads to return successfully
 local function await(...)
-	local threads = asThreads(...)
+	local promises = asPromises(...)
 	local rets = {}
 	local count = 0
-	for thr, _ in pairs(threads) do
-		if type(thr) == 'thread' then
-			if coroutine.status(thr) == 'dead' then
-				error('Thread is already end')
-			end
+	for i, pm in ipairs(promises) do
+		if pm._status == Promise.FULFILLED then
+			count = count + 1
+			rets[i] = pm._result
+		elseif pm._status == Promise.REJECTED then
+			error(newThreadErr(i, pm._result), 2)
 		end
 	end
-	while count ~= #threads do
-		local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
-		local i = threads[thr]
+	while count ~= #promises do
+		local event, pm, ok, ret = coroutine.yield(eventCoroutineDone)
+		local i = promises[pm]
 		if i then
 			if not ok then
 				error(newThreadErr(i, ret), 2)
@@ -85,20 +137,28 @@ end
 
 -- wait the first threads to return successfully
 local function awaitAny(...)
-	local threads = asThreads(...)
-	if #threads == 0 then
+	local promises = asPromises(...)
+	if #promises == 0 then
 		error('No threads could be run', 2)
 	end
 	local errors = {}
 	local errCount = 0
+	for i, pm in ipairs(promises) do
+		if pm._status == Promise.FULFILLED then
+			return i, table.unpack(pm._result, 1, pm._result.n)
+		elseif pm._status == Promise.REJECTED then
+			errCount = errCount + 1
+			errors[i] = pm._result
+		end
+	end
 	while true do
-		local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
-		local i = threads[thr]
+		local event, pm, ok, ret = coroutine.yield(eventCoroutineDone)
+		local i = promises[pm]
 		if i then
 			if not ok then
 				errCount = errCount + 1
 				errors[i] = ret
-				if errCount == #threads then
+				if errCount == #promises then
 					local err = {
 						msg = 'All threads failed',
 						errs = errors,
@@ -115,131 +175,180 @@ local function awaitAny(...)
 					error(err, 2)
 				end
 			end
-			return i, ret
+			return i, table.unpack(ret, 1, ret.n)
 		end
 	end
 end
 
 -- wait the threads that exit first (including error)
 local function awaitRace(...)
-	local threads = asThreads(...)
-	if #threads == 0 then
+	local promises = asPromises(...)
+	if #promises == 0 then
 		error('No threads could be run', 2)
 	end
+	for i, pm in ipairs(promises) do
+		if pm._status == Promise.FULFILLED then
+			return i, table.unpack(pm._result, 1, pm._result.n)
+		elseif pm._status == Promise.REJECTED then
+			error(newThreadErr(i, pm._result), 2)
+		end
+	end
 	while true do
-		local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
-		local i = threads[thr]
+		local event, pm, ok, ret = coroutine.yield(eventCoroutineDone)
+		local i = promises[pm]
 		if i then
 			if not ok then
 				error(newThreadErr(i, ret), 2)
 			end
-			return i, ret
+			return i, table.unpack(ret, 1, ret.n)
 		end
-	end
-end
-
-local function clearTable(t)
-	for k, _ in pairs(t) do
-		t[k] = nil
 	end
 end
 
 local function queueInternalEvent(name, ...)
 	assert(type(name) == 'string')
-	coroutine.yield('/queue', name, ...)
+	execute('/queue', name, ...)
+end
+
+local os_startTimer = os.startTimer
+local os_cancelTimer = os.cancelTimer
+
+local function startTimerPatch(time)
+	assert(type(time) == 'number' or type(time) == 'nil')
+	return execute('/timer', time or 0)
+end
+
+local function cancelTimerPatch(id)
+	execute('/canceltimer', id)
+end
+
+local function applyOSPatches()
+	os.startTimer = startTimerPatch
+	os.cancelTimer = cancelTimerPatch
+end
+
+local function revertOSPatches()
+	os.startTimer = os_startTimer
+	os.cancelTimer = os_cancelTimer
 end
 
 local function main(...)
+	local RUNTIME_ID = {}
 	local routines = {}
 	local mainThreads = {}
 	local eventListeners = {}
 
-	setmetatable(routines, { __mode = 'k' }) -- try avoid thread key leak issue
-
-	for i, fn in ipairs({...}) do
-		if type(fn) == 'table' then
-			assert(type(fn.event) == 'string')
-			assert(type(fn.callback) == 'function')
-			local l = eventListeners[fn.event]
+	for i, arg in ipairs({...}) do
+		if type(arg) == 'table' then
+			assert(type(arg.event) == 'string')
+			assert(type(arg.callback) == 'function')
+			local l = eventListeners[arg.event]
 			if l then
-				l[#l + 1] = fn
+				l[#l + 1] = arg
 			else
-				eventListeners[fn.event] = {fn}
+				eventListeners[arg.event] = {arg}
 			end
-		elseif type(fn) == 'function' then
-			thr = coroutine.create(fn)
-			routines[i] = thr
-			routines[thr] = i
-			mainThreads[thr] = true
+		elseif type(arg) == 'function' then
+			local pm = newPromise(coroutine.create(arg))
+			routines[i] = pm
+			routines[pm] = i
+			mainThreads[pm] = true
 		else
-			error(string.format('Bad argument #%d (function expected, got %s)', i, type(fn)), 2)
+			error(string.format('Bad argument #%d (function or table expected, got %s)', i, type(fn)), 2)
 		end
 	end
 
+	local timers = {
+		-- [id] = os.clock(),
+	}
+	local timerSID = 1
+	local tickTimerId = os.startTimer(0)
 	local internalEvents = {}
 	local eventFilter = {}
-	local eventData = { n = 0 }
+	local eventData = {}
+	local queueInternalEvent = function(event, ...)
+		internalEvents[#internalEvents + 1] = {event, ...}
+	end
 	while true do
 		local instantResume = false
 		local keepLoop = false
 		local eventType = eventData[1]
+
+		applyOSPatches()
 		for i, r in pairs(routines) do
 			if type(i) == 'number' then
 				keepLoop = true
+				-- only pass internal event when asked to
 				if eventFilter[r] == nil and (not eventType or string.sub(eventType, 1, 1) ~= '#') or eventFilter[r] == eventType then
 					eventFilter[r] = nil
 					local next = eventData
 					repeat
-						local res = table.pack(coroutine.resume(r, table.unpack(next, 1, next.n)))
+						local rn = r.native
+						local res = table.pack(coroutine.resume(rn, table.unpack(next, 1, next.n)))
 						next = false
 						local ok, data = res[1], res[2]
 						if not ok then -- error occurred
 							if mainThreads[r] then
-								error(tostring(r) .. ': ' .. tostring(data), 1)
+								error(tostring(rn) .. ': ' .. tostring(data), 1)
 							end
 							routines[i] = nil
 							routines[r] = nil
-							internalEvents[#internalEvents + 1] = {eventCoroutineDone, r, false, data}
+							r._status = Promise.REJECTED
+							r._result = data
+							queueInternalEvent(eventCoroutineDone, r, false, data)
 						else
-							local isDead = coroutine.status(r) == 'dead'
+							local isDead = coroutine.status(rn) == 'dead'
 							if isDead then
 								routines[i] = nil
 								routines[r] = nil
+								r._status = Promise.FULFILLED
 								local ret = table.pack(table.unpack(res, 2, res.n))
-								internalEvents[#internalEvents + 1] = {eventCoroutineDone, r, true, ret}
+								r._result = ret
+								queueInternalEvent(eventCoroutineDone, r, true, ret)
 							elseif type(data) == 'string' then
-								if data == '/exit' then
-									return table.unpack(res, 3)
-								elseif data == '/current' then
+								eventFilter[r] = data
+							elseif data == nil and type(res[3]) == 'string' then
+								local command = res[3]
+								if command == '/exit' then
+									revertOSPatches()
+									return table.unpack(res, 4)
+								elseif command == '/current' then
 									next = {r}
-								elseif data == '/yield' then
+								elseif command == '/yield' then
 									instantResume = true
-								elseif data == '/queue' then
-									internalEvents[#internalEvents + 1] = table.pack(table.unpack(res, 3, res.n))
-									next = {}
-								elseif data == '/run' then
-									local thr
-									local p2 = res[3]
-									if type(p2) == 'thread' then
-										thr = p2
+								elseif command == '/queue' then
+									queueInternalEvent(table.unpack(res, 4, res.n))
+									next = EMPTY_TABLE
+								elseif command == '/timer' then
+									local time = res[4]
+									timers[timerSID] = os.clock() + math.floor(time * 20 + 0.5) / 20
+									next = {timerSID}
+									timerSID = timerSID + 1
+								elseif command == '/canceltimer' then
+									local timerId = res[4]
+									timers[timerId] = nil
+									next = EMPTY_TABLE
+								elseif command == '/run' then
+									local pm = res[4]
+									next = EMPTY_TABLE
+									if pm._runon then
+										if pm._runon ~= RUNTIME_ID then
+											next = {string.format('%s: Promise %s is already running on a different runtime', tostring(rn), tostring(pm))}
+										end
 									else
-										local fn = p2
-										thr = coroutine.create(function() return fn(table.unpack(res, 4, res.n)) end)
+										pm._runon = RUNTIME_ID
+										local j = #routines + 1
+										routines[j] = pm
+										routines[pm] = j
+										instantResume = true
 									end
-									local j = #routines + 1
-									routines[j] = thr
-									routines[thr] = j
-									next = {thr}
-									instantResume = true
-								elseif data == '/stop' then -- TODO: is this really needed and safe?
-									local thr = res[3]
-									local j = routines[thr]
+								elseif command == '/stop' then -- TODO: is this really needed and safe?
+									local pm = res[4]
+									local j = routines[pm]
 									if j then
 										routines[j] = nil
-										routines[thr] = nil
+										routines[pm] = nil
 									end
-								else
-									eventFilter[r] = data
 								end
 							end
 						end
@@ -247,6 +356,7 @@ local function main(...)
 				end
 			end
 		end
+		revertOSPatches()
 
 		if not keepLoop then
 			return
@@ -255,18 +365,35 @@ local function main(...)
 		if #internalEvents > 0 then
 			eventData = table.remove(internalEvents, 1)
 		elseif instantResume then
-			eventData = {}
+			eventData = EMPTY_TABLE
 		else
 			local flag
 			repeat
 				flag = true
 				eventData = table.pack(os.pullEventRaw())
-				local l = eventListeners[eventData[1]]
-				if l then
-					for _, d in pairs(l) do
-						if d.callback(table.unpack(eventData, 1, eventData.n)) == false then
-							flag = false
-							break
+				if eventData[1] == 'timer' and eventData[2] == tickTimerId then
+					tickTimerId = os.startTimer(0)
+					local now = os.clock()
+					for id, exp in pairs(timers) do
+						print('checking', id, exp, now)
+						if exp <= now then
+							timers[id] = nil
+							queueInternalEvent('timer', id)
+						end
+					end
+					if #internalEvents > 0 then
+						eventData = {'#crx_tick'}
+					else
+						flag = false
+					end
+				else
+					local l = eventListeners[eventData[1]]
+					if l then
+						for _, d in pairs(l) do
+							if d.callback(table.unpack(eventData, 1, eventData.n)) == false then
+								flag = false
+								break
+							end
 						end
 					end
 				end
@@ -290,26 +417,26 @@ local function newThreadPool(limit)
 	pool.limit = function() return limit end
 
 	pool.queue = function(fn, ...)
-		local typ = type(fn)
-		if typ ~= 'function' then
-			error(string.format('Argument #1 is %s, but expect a function', typ), 2)
+		if type(fn) ~= 'function' then
+			error(string.format('Argument #1 is %s, but expect a function', type(fn)), 1)
 		end
 		local args = table.pack(...)
-		local thr = coroutine.create(function() fn(table.unpack(args, 1, args.n)) end)
+		local pm = newPromise(coroutine.create(function() fn(table.unpack(args, 1, args.n)) end))
 		if count < limit then
 			count = count + 1
 			local i = #running + 1
-			running[i] = thr
-			running[thr] = i
-			run(thr)
+			running[i] = pm
+			running[pm] = i
+			run(pm)
 		else
-			waiting[#waiting + 1] = thr
+			waiting[#waiting + 1] = pm
 		end
-		return thr
+		return pm
 	end
 
 	pool.exec = function(fn, ...)
-		return table.unpack(await(pool.queue(fn, ...)))
+		local res = await(pool.queue(fn, ...))
+		return table.unpack(res, 1, res.n)
 	end
 
 	-- -- release the current thread fron the pool
@@ -341,21 +468,21 @@ local function newThreadPool(limit)
 
 	run(function()
 		while true do
-			local event, thr, ok, ret = coroutine.yield(eventCoroutineDone)
-			local i = running[thr]
+			local event, pm, ok, ret = coroutine.yield(eventCoroutineDone)
+			local i = running[pm]
 			if i then
 				if not ok then
 					error(newThreadErr(-i, ret), 2)
 				end
 				if #waiting > 0 then
-					running[thr] = nil
+					running[pm] = nil
 					local nxt = table.remove(waiting, 1)
 					running[i] = nxt
 					running[nxt] = i
 					run(nxt)
 				else
 					running[i] = nil
-					running[thr] = nil
+					running[pm] = nil
 					count = count - 1
 					if count == 0 then
 						queueInternalEvent(eventPoolTasksDone, pool)

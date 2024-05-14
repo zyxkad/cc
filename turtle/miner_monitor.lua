@@ -69,6 +69,7 @@ local function listenData()
 				d.y = msg.y
 				d.z = msg.z
 				d.fuel = msg.fuel
+				d.act = msg.act
 			else
 				d = {
 					t = getTime(),
@@ -78,6 +79,7 @@ local function listenData()
 					y = msg.y,
 					z = msg.z,
 					fuel = msg.fuel,
+					act = msg.act,
 				}
 				datas[msg.name] = d
 			end
@@ -95,7 +97,7 @@ local function listenData()
 	end
 end
 
-local function renderData(monitor)
+local function renderDataMonitor(monitor)
 	local mWidth, mHeight = monitor.getSize()
 
 	monitor.setTextColor(colors.black)
@@ -107,12 +109,35 @@ local function renderData(monitor)
 	monitor.setBackgroundColor(colors.black)
 	for _, d in pairs(datas) do
 		termUpdateAt(monitor, 1, i, string.format(' %s | %s %s %s', d.name, d.x, d.y, d.z))
-		termUpdateAt(monitor, 1, i + 1, string.format('  | %s | %s | %s', formatTime(d.t), tostring(d.fuel)))
+		termUpdateAt(monitor, 1, i + 1, string.format('  | %s | %s | %s', formatTime(d.t), tostring(d.fuel), d.act))
 		i = i + 2
 	end
 	for n = i, mHeight do
 		monitor.setCursorPos(1, n)
 		monitor.clearLine()
+	end
+end
+
+local function renderDataPocket()
+	local mWidth, mHeight = term.getSize()
+
+	term.setTextColor(colors.black)
+	term.setBackgroundColor(colors.lightGray)
+	termUpdateAtCenter(term, 1, 'GM v1 ' .. gamedate(true))
+
+	local i = DATA_OFFSET
+	term.setTextColor(colors.white)
+	term.setBackgroundColor(colors.black)
+	for _, d in pairs(datas) do
+		termUpdateAt(term, 1, i, string.format(' - %s', d.name))
+		termUpdateAt(term, 1, i + 1, string.format(' | %s %s %s', d.x, d.y, d.z))
+		termUpdateAt(term, 1, i + 2, string.format(' | %s | %s', formatTime(d.t), tostring(d.fuel)))
+		termUpdateAt(term, 1, i + 3, string.format(' | %s', d.act))
+		i = i + 4
+	end
+	for n = i, mHeight do
+		term.setCursorPos(1, n)
+		term.clearLine()
 	end
 end
 
@@ -138,23 +163,31 @@ local function loadData()
 end
 
 function main(monitorSide)
-	local monitor
-	if monitorSide then
-		monitor = peripheral.wrap(monitorSide)
-		if not monitor then
-			printError(string.format('Cannot find peripheral %s', monitorSide))
-			return
-		elseif not peripheral.hasType(monitor, 'monitor') then
-			printError(string.format('%s is not a monitor', monitorSide))
-			return
-		end
+	local renderData
+	if pocket then
+		renderData = renderDataPocket
 	else
-		monitor = term
+		local monitor
+		if monitorSide then
+			monitor = peripheral.wrap(monitorSide)
+			if not monitor then
+				printError(string.format('Cannot find peripheral %s', monitorSide))
+				return
+			elseif not peripheral.hasType(monitor, 'monitor') then
+				printError(string.format('%s is not a monitor', monitorSide))
+				return
+			end
+		else
+			monitor = term
+		end
+		monitor.setTextColor(colors.white)
+		monitor.setBackgroundColor(colors.black)
+		monitor.clear()
+		monitor.setCursorPos(1, 1)
+		renderData = function()
+			renderDataMonitor(monitor)
+		end
 	end
-	monitor.setTextColor(colors.white)
-	monitor.setBackgroundColor(colors.black)
-	monitor.clear()
-	monitor.setCursorPos(1, 1)
 
 	peripheral.find('modem', function(m)
 		return peripheral.call(m, 'isWireless') and rednet.open(m)
@@ -169,7 +202,7 @@ function main(monitorSide)
 		end
 	end, function()
 		while true do
-			renderData(monitor)
+			renderData()
 			sleep(0.2)
 		end
 	end)

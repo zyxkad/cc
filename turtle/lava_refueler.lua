@@ -62,6 +62,7 @@ function main(args)
 	local ok = true
 	while turtle.getFuelLevel() < fuelLimit do
 		drop()
+		while not redstone.getInput('left') do sleep(0) end
 		if not suck() then
 			ok = false
 			printError('No fuel left in the tank')
@@ -73,6 +74,7 @@ function main(args)
 	if ok then
 		-- don't keep the bucket
 		drop()
+		sleep(1)
 	end
 	print('Fuel end:', turtle.getFuelLevel(), 'out of', fuelLimit)
 end

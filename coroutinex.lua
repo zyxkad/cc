@@ -6,7 +6,11 @@ local EMPTY_TABLE = {}
 
 local function execute(command, ...)
 	assert(type(command) == 'string')
-	return coroutine.yield(nil, command, ...)
+	local res = table.pack(coroutine.yield(nil, command, ...))
+	if res[1] ~= ('^' .. command) then
+		error('Tring to execute command ' .. command .. ' outside coroutinex threads', 3)
+	end
+	return table.unpack(res, 2, res.n)
 end
 
 local Promise = {
@@ -58,11 +62,11 @@ local function run(pm, ...)
 	elseif type(pm) == 'thread' then
 		pm = newPromise(pm)
 	elseif not isPromise(pm) then
-		error('Argument #1 must be function, thread, or promise, but got ' .. type(pm), 1)
+		error('Argument #1 must be function, thread, or promise, but got ' .. type(pm), 2)
 	end
 	local err = execute('/run', pm)
 	if err then
-		error(err, 1)
+		error(err, 2)
 	end
 	return pm
 end
@@ -74,6 +78,14 @@ end
 -- asleep(n) is an alias of `run(sleep, n)`
 local function asleep(n)
 	return run(sleep, n)
+end
+
+local function nextTick()
+	coroutine.yield('#crx_tick')
+end
+
+local function yield()
+	coroutine.yield(nil, '/yield')
 end
 
 local function asPromises(...)
@@ -210,9 +222,6 @@ local function queueInternalEvent(name, ...)
 	execute('/queue', name, ...)
 end
 
-local os_startTimer = os.startTimer
-local os_cancelTimer = os.cancelTimer
-
 local function startTimerPatch(time)
 	assert(type(time) == 'number' or type(time) == 'nil')
 	return execute('/timer', time or 0)
@@ -222,7 +231,12 @@ local function cancelTimerPatch(id)
 	execute('/canceltimer', id)
 end
 
+local os_startTimer = os.startTimer
+local os_cancelTimer = os.cancelTimer
+
 local function applyOSPatches()
+	os_startTimer = os.startTimer
+	os_cancelTimer = os.cancelTimer
 	os.startTimer = startTimerPatch
 	os.cancelTimer = cancelTimerPatch
 end
@@ -258,6 +272,7 @@ local function main(...)
 		end
 	end
 
+	local waitingTick = false
 	local timers = {
 		-- [id] = os.clock(),
 	}
@@ -289,7 +304,8 @@ local function main(...)
 						local ok, data = res[1], res[2]
 						if not ok then -- error occurred
 							if mainThreads[r] then
-								error(tostring(rn) .. ': ' .. tostring(data), 1)
+								revertOSPatches()
+								error(tostring(rn) .. ': ' .. tostring(data), 2)
 							end
 							routines[i] = nil
 							routines[r] = nil
@@ -306,6 +322,9 @@ local function main(...)
 								r._result = ret
 								queueInternalEvent(eventCoroutineDone, r, true, ret)
 							elseif type(data) == 'string' then
+								if data == '#crx_tick' then
+									waitingTick = true
+								end
 								eventFilter[r] = data
 							elseif data == nil and type(res[3]) == 'string' then
 								local command = res[3]
@@ -313,27 +332,27 @@ local function main(...)
 									revertOSPatches()
 									return table.unpack(res, 4)
 								elseif command == '/current' then
-									next = {r}
+									next = {'^'..command, r}
 								elseif command == '/yield' then
 									instantResume = true
 								elseif command == '/queue' then
 									queueInternalEvent(table.unpack(res, 4, res.n))
-									next = EMPTY_TABLE
+									next = {'^'..command}
 								elseif command == '/timer' then
 									local time = res[4]
 									timers[timerSID] = os.clock() + math.floor(time * 20 + 0.5) / 20
-									next = {timerSID}
+									next = {'^'..command, timerSID}
 									timerSID = timerSID + 1
 								elseif command == '/canceltimer' then
 									local timerId = res[4]
 									timers[timerId] = nil
-									next = EMPTY_TABLE
+									next = {'^'..command}
 								elseif command == '/run' then
 									local pm = res[4]
-									next = EMPTY_TABLE
+									next = {'^'..command}
 									if pm._runon then
 										if pm._runon ~= RUNTIME_ID then
-											next = {string.format('%s: Promise %s is already running on a different runtime', tostring(rn), tostring(pm))}
+											next = {'^'..command, string.format('%s: Promise %s is already running on a different runtime', tostring(rn), tostring(pm))}
 										end
 									else
 										pm._runon = RUNTIME_ID
@@ -370,19 +389,21 @@ local function main(...)
 			local flag
 			repeat
 				flag = true
-				eventData = table.pack(os.pullEventRaw())
+				eventData = table.pack(coroutine.yield())
 				if eventData[1] == 'timer' and eventData[2] == tickTimerId then
 					tickTimerId = os.startTimer(0)
 					local now = os.clock()
 					for id, exp in pairs(timers) do
-						print('checking', id, exp, now)
 						if exp <= now then
 							timers[id] = nil
 							queueInternalEvent('timer', id)
 						end
 					end
-					if #internalEvents > 0 then
+					if waitingTick then
+						waitingTick = false
 						eventData = {'#crx_tick'}
+					elseif #internalEvents > 0 then
+						eventData = table.remove(internalEvents, 1)
 					else
 						flag = false
 					end
@@ -557,6 +578,8 @@ return {
 	run = run,
 	exit = exit,
 	asleep = asleep,
+	nextTick = nextTick,
+	yield = yield,
 	await = await,
 	awaitAny = awaitAny,
 	awaitRace = awaitRace,

@@ -27,9 +27,8 @@ local recipes = {} --[[
 		},
 		stages: [{
 			crafter: string = <crafter type>,
-			extra: {
-				-- the item in extra will be pushed to the `storage` that the crafter data refrences.
-				[storage: string]: {
+			operators: {
+				[operator: string]: {
 					name: string | nil,
 					tags: [tag: string ...] | nil,
 					nbt: string | false | nil,
@@ -107,7 +106,10 @@ local function loadRecipeDir(dir)
 			if fd then
 				local data = fd.readAll()
 				fd.close()
-				local recipe = textutils.unserialiseJSON(data)
+				local recipe, err = textutils.unserialiseJSON(data)
+				if not recipe then
+					error(string.format('Cannot load %s: %s', name, err), 0)
+				end
 				loadRecipe(recipe)
 			else
 				printError(string.format('Cannot open %s: %s', name, err))
@@ -132,10 +134,23 @@ local function getItemTags(inv, slot, name)
 end
 
 local function findItemInInventory(inv, target)
-	local list = inv.list()
+	local listFn = peripheral.wrap(inv).list
+	basalt.debug(listFn)
+	local list
+	parallel.waitForAny(function()
+		list = listFn()
+	end, function()
+		local i = 0
+		while true do
+			i = i + 1
+			basalt.debug('listing', i)
+			sleep(0)
+		end
+	end)
+	basalt.debug('listed', list)
 	if target.name then
 		for slot, item in pairs(list) do
-			if item.name == target.name and (target.nbt == nil or (target.nbt == false and item.nbt == nil) or item.nbt == target.nbt) then
+			if item.name == target.name and (target.nbt == false or item.nbt == target.nbt) then
 				return slot, item
 			end
 		end
@@ -220,7 +235,7 @@ local function allocCPU(stage, source, last, item)
 		local _, res = await(function()
 			peripheral.call(name, 'pullItems', last, item.slot, 1, 1)
 		end, function()
-			local deployerItemSlot = findItemInInventory(inv, stage.extra.deployer)
+			local deployerItemSlot = findItemInInventory(source, stage.operators.deployer)
 			if not deployerItemSlot then
 				return false
 			end
@@ -230,7 +245,7 @@ local function allocCPU(stage, source, last, item)
 		if not res[1] then
 			-- push back the base material
 			peripheral.call(name, 'pushItems', last, 1)
-			return nil, 'ITEM_MISSING', stage.extra.deployer
+			return nil, 'ITEM_MISSING', stage.operators.deployer
 		end
 		return true, name, data.processing
 	else
@@ -238,7 +253,14 @@ local function allocCPU(stage, source, last, item)
 	end
 end
 
-local function craftRecipe(source, target, count)
+local function releaseCPU(name)
+	local data = mechanicalPresses[name] or deployers[name]
+	if data then
+		data.processing = nil
+	end
+end
+
+local function craftRecipe(source, targetInv, target, count)
 	local recipe = recipes[target]
 	if not recipe then
 		return nil, 'recipe not found'
@@ -250,38 +272,54 @@ local function craftRecipe(source, target, count)
 		processing = {
 			item = item,
 		}
+		basalt.debug('found', item.name, 'at', itemSlot)
 	end
 	for i, stage in ipairs(recipe.stages) do
 		if lastCrafter and processing then
+			basalt.debug('waiting change')
 			local current
 			repeat
-				crx.nextTick()
 				current = peripheral.call(lastCrafter, 'getItemDetail', 1)
 			until processing.item.name ~= current.name or processing.item.nbt ~= current.nbt
 			processing = current
+			basalt.debug('found change')
 		end
 		if lastStage and lastStage.crafter == stage.crafter then
 			if stage.crafter == 'create:deployer' then
-				local deployerItem = stage.extra.deployer
+				local deployerItem = stage.operators.deployer
+				basalt.debug('finding', deployerItem.name)
 				local deployerItemSlot = findItemInInventory(source, deployerItem)
 				if not deployerItemSlot then
 					onMaterialMissing(deployerItem)
-					return nil, 'ITEM_MISSING', deployerItem
+					repeat
+						deployerItemSlot = findItemInInventory(source, deployerItem)
+					until deployerItemSlot
 				end
-				peripheral.call(data.deployer, 'pullItems', source, deployerItemSlot, 1, 1)
+				local pulled = peripheral.call(data.deployer, 'pullItems', source, deployerItemSlot, 1, 1)
+				basalt.debug('pulled', pulled)
 			end
 		else
 			local ok, name, item = allocCPU(stage, source, lastCrafter, processing.item)
 			if not ok then
 				if name == 'ITEM_MISSING' then
 					onMaterialMissing(item)
+					repeat
+						ok, name, item = allocCPU(stage, source, lastCrafter, processing.item)
+					until ok or name ~= 'ITEM_MISSING'
 				end
-				return nil, 'ITEM_MISSING', item
+				if not ok then
+					return nil, name, item
+				end
 			end
+			releaseCPU(lastCrafter)
 			lastCrafter = name
 			processing = item
 		end
 		lastStage = stage
+	end
+	if lastCrafter then
+		peripheral.call(targetInv, 'pullItems', lastCrafter, 1)
+		releaseCPU(lastCrafter)
 	end
 	return 1
 end
@@ -295,19 +333,19 @@ local statsFrame = mainFrame:addFrame()
 	:setBackground(false)
 	:setForeground(false)
 
-local recipeCountLabel = statsFrame:addLabel()
-	:setText("%d recipes")
-	:setPosition(1, 1)
 local pressCountLabel = statsFrame:addLabel()
 	:setText("Presses   %d")
-	:setPosition(1, 2)
+	:setPosition(1, 1)
 local deployerCountLabel = statsFrame:addLabel()
 	:setText("Deployers %d")
-	:setPosition(1, 3)
+	:setPosition(1, 2)
+local recipeCountLabel = statsFrame:addLabel()
+	:setText("Total %d recipes")
+	:setPosition(1, 4)
 
 local addBtnsFrame = mainFrame:addFrame()
-	:setSize(21, 7)
-	:setPosition("parent.w - 23", 2)
+	:setSize(21, 5)
+	:setPosition("parent.w - 22", 2)
 	:setBackground(colors.gray)
 	:setForeground(colors.white)
 local addCreatePressBtn = addBtnsFrame:addButton()
@@ -389,6 +427,16 @@ local addCreateDeployerCancelBtn = addCreateDeployerFrame:addButton()
 	:setBackground(false)
 	:setForeground(colors.red)
 
+local recipeList = mainFrame:addList()
+	:setScrollable(true)
+	:setSize(35, "parent.h - 9")
+	:setPosition(3, 8)
+	:setBackground(colors.gray)
+	:setForeground(colors.white)
+local craftButton = mainFrame:addButton()
+	:setText("[Craft]")
+	:setPosition(39, 12)
+
 local function isPeripheralRegistered(name)
 	if mechanicalPresses[name] or deployers[name] then
 		return true
@@ -401,7 +449,7 @@ local function isPeripheralRegistered(name)
 	return false
 end
 
-local function initTUI(crafterDir, recipeDir)
+local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 	local function refreshCountLabels()
 		recipeCountLabel:setText(string.format("%d recipes", tableCount(recipes)))
 		pressCountLabel:setText(string.format("Presses   %d", tableCount(mechanicalPresses)))
@@ -477,6 +525,36 @@ local function initTUI(crafterDir, recipeDir)
 			addCreateDeployerFrame:setVisible(false)
 		end
 	end)
+
+	local craftables = {}
+	for name, _ in pairs(recipes) do
+		craftables[#craftables + 1] = name
+	end
+	table.sort(craftables)
+	recipeList:clear()
+	for _, name in ipairs(craftables) do
+		recipeList:addItem(name)
+	end
+
+	craftButton:onClick(function(self, event, btn)
+		if event == 'mouse_click' and (btn == 1 or btn == 2) then
+			local selected = recipeList:getItem(recipeList:getItemIndex())
+			if selected then
+				local target = selected.text
+				local count = 0
+				if count <= 0 then
+					count = btn == 2 and 16 or 1
+				end
+				basalt.debug('crafting', target, count)
+				co_run(function()
+					local ok, err = craftRecipe(sourceInv, targetInv, target, count)
+					if not ok then
+						basalt.debug('craft failed', err)
+					end
+				end)
+			end
+		end
+	end)
 end
 
 ---- END TUI ----
@@ -489,12 +567,9 @@ end
 --- pullEvents handle events
 local function pullEvents()
 	local event, p1, p2, p3 = os.pullEvent()
-	if event == 'x' then
+	if event == 'peripheral' then
+	elseif event == 'peripheral_detach' then
 	end
-end
-
---- update operate the crafters
-local function update()
 end
 
 function main(args)
@@ -519,17 +594,12 @@ function main(args)
 	print('Loaded ' .. tableCount(recipes) .. ' recipes')
 
 	co_main(function()
-		initTUI(crafterDir, recipeDir)
+		initTUI(crafterDir, recipeDir, inputName, outputName)
 		sleep(0.1)
 		renderTUI()
 	end, function()
 		while true do
 			pullEvents()
-		end
-	end, function()
-		while true do
-			update()
-			crx.nextTick()
 		end
 	end)
 end

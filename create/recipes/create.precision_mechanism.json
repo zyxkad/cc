@@ -1,0 +1,37 @@
+{
+	"type": "sequence",
+	"initItem": {
+		"name": "create:golden_sheet",
+		"nbt": false
+	},
+	"stages": [
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"name": "create:cogwheel",
+					"nbt": false
+				}
+			}
+		},
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"name": "create:large_cogwheel",
+					"nbt": false
+				}
+			}
+		},
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"name": "minecraft:iron_nugget",
+					"nbt": false
+				}
+			}
+		}
+	],
+	"output": "create:precision_mechanism"
+}

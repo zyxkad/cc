@@ -4,6 +4,7 @@
 		"name": "create:golden_sheet",
 		"nbt": false
 	},
+	"repeats": 5,
 	"stages": [
 		{
 			"crafter": "create:deployer",

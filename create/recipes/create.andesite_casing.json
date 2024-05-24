@@ -1,0 +1,18 @@
+{
+	"type": "sequence",
+	"initItem": {
+		"tags": ["forge:stripped_logs"]
+	},
+	"stages": [
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"name": "create:andesite_alloy",
+					"nbt": false
+				}
+			}
+		}
+	],
+	"output": "create:andesite_casing"
+}

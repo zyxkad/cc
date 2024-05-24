@@ -1,0 +1,18 @@
+{
+	"type": "sequence",
+	"initItem": {
+		"tags": ["forge:stripped_logs"]
+	},
+	"stages": [
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"name": "minecraft:copper_ingot",
+					"nbt": false
+				}
+			}
+		}
+	],
+	"output": "create:copper_casing"
+}

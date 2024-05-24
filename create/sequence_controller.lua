@@ -2,36 +2,55 @@
 -- by zyxkad@gmail.com
 
 local crx = require('coroutinex')
+crx.startDebug()
 local co_main = crx.main
 local co_run = crx.run
 local await = crx.await
+local awaitAny = crx.awaitAny
+--[[
+wget run https://basalt.madefor.cc/install.lua packed
+]]
 local basalt = require('basalt')
 
 -- crafters
 
-local mechanicalPressDepotId = 'create:depot'
-local deployerId = 'create:deployer'
-local deployerDepotId = 'create:depot'
+local mechanicalPressDepotType = 'create:depot'
+local deployerType = 'create:deployer'
+local deployerDepotType = 'create:depot'
+local spoutType = 'create:spout'
+local spoutDepotType = 'create:depot'
+
+local pressCrafterId = 'create:press'
+local spoutCrafterId = 'create:spout'
+local deployerCrafterId = 'create:deployer'
 
 local mechanicalPresses = {} -- { [depot: string]: { processing: table } }
 local deployers = {} -- { [depot: string]: { deployer: string, processing: table } }
+local spouts = {} -- { [depot: string]: { spout: string, processing: table } }
 
 local recipes = {} --[[
 {
 	[output: string] = {
 		type = 'sequence',
 		initItem: {
-			name: string | nil,
-			tags: [tag: string ...] | nil,
+			name: string,
 			nbt: string | false | nil,
+		} | {
+			tags: [tag: string ...],
 		},
+		repeats: number | nil,
 		stages: [{
 			crafter: string = <crafter type>,
 			operators: {
 				[operator: string]: {
-					name: string | nil,
-					tags: [tag: string ...] | nil,
+					name: string,
 					nbt: string | false | nil,
+					reusable: boolean | nil,
+				} | {
+					tags: [tag: string ...],
+				} | {
+					fluid: string,
+					amount: number,
 				},
 			}
 		}...],
@@ -39,6 +58,7 @@ local recipes = {} --[[
 	}
 }
 ]]
+local inProgress = {}
 
 local function tableCount(t)
 	local count = 0
@@ -49,15 +69,22 @@ local function tableCount(t)
 end
 
 local function loadCrafter(crafter)
-	if crafter.type == 'create:press' then
-		if peripheral.hasType(crafter.name, mechanicalPressDepotId) then
+	if crafter.type == pressCrafterId then
+		if peripheral.hasType(crafter.name, mechanicalPressDepotType) then
 			mechanicalPresses[crafter.name] = {}
 			return true
 		end
-	elseif crafter.type == 'create:deployer' then
-		if peripheral.hasType(crafter.name, deployerDepotId) and peripheral.hasType(crafter.deployer, deployerId) then
+	elseif crafter.type == deployerCrafterId then
+		if peripheral.hasType(crafter.name, deployerDepotType) and peripheral.hasType(crafter.deployer, deployerType) then
 			deployers[crafter.name] = {
 				deployer = crafter.deployer,
+			}
+			return true
+		end
+	elseif crafter.type == spoutCrafterId then
+		if peripheral.hasType(crafter.name, spoutDepotType) and peripheral.hasType(crafter.spout, spoutType) then
+			spouts[crafter.name] = {
+				spout = crafter.spout,
 			}
 			return true
 		end
@@ -125,7 +152,7 @@ local function getItemTags(inv, slot, name)
 	if tags then
 		return tags
 	end
-	local detail = inv.getItemDetail(slot)
+	local detail = peripheral.call(inv, 'getItemDetail', slot)
 	if not detail or detail.name ~= name then
 		return nil
 	end
@@ -133,21 +160,33 @@ local function getItemTags(inv, slot, name)
 	return detail.tags
 end
 
+local listCaches = {}
+local tankCaches = {}
+
 local function findItemInInventory(inv, target)
-	local listFn = peripheral.wrap(inv).list
-	basalt.debug(listFn)
 	local list
-	parallel.waitForAny(function()
-		list = listFn()
-	end, function()
-		local i = 0
-		while true do
-			i = i + 1
-			basalt.debug('listing', i)
-			sleep(0)
+	do
+		local d = listCaches[inv]
+		if d then
+			if d.pending then
+				local res = await(d.pending)
+				list = res[1]
+			elseif d.ttl > os.clock() then
+				list = d.list
+			end
 		end
-	end)
-	basalt.debug('listed', list)
+	end
+	if not list then
+		pending = co_run(function() return peripheral.call(inv, 'list') end)
+		listCaches[inv] = {
+			pending = pending,
+		}
+		list = await(pending)
+		listCaches[inv] = {
+			ttl = os.clock() + 1,
+			list = list,
+		}
+	end
 	if target.name then
 		for slot, item in pairs(list) do
 			if item.name == target.name and (target.nbt == false or item.nbt == target.nbt) then
@@ -193,6 +232,117 @@ local function findItemInInventory(inv, target)
 	return nil
 end
 
+local function transferItems(source, target, fromSlot, toSlot, limit)
+	local count = peripheral.call(source, 'pushItems', target, fromSlot, limit, toSlot)
+	if count == 0 then
+		return
+	end
+	do
+		local d = listCaches[source]
+		if d and d.list then
+			local i = d.list[fromSlot]
+			if i then
+				i.count = i.count - count
+				if i.count <= 0 then
+					d.list[fromSlot] = nil
+				end
+			end
+		end
+	end
+	if toSlot then
+		local d = listCaches[target]
+		if d and d.list then
+			local i = d.list[toSlot]
+			if i then
+				i.count = i.count + count
+			else
+				d.ttl = 0
+			end
+		end
+	end
+end
+
+local function getTankInfo(tank)
+	local name = peripheral.getName(tank)
+	local info
+	do
+		local d = tankCaches[name]
+		if d then
+			if d.pending then
+				local res = await(d.pending)
+				info = res[1]
+			elseif d.ttl > os.clock() then
+				info = d.info
+			end
+		end
+	end
+	if not info then
+		pending = co_run(tank.getInfo)
+		tankCaches[name] = {
+			pending = pending,
+		}
+		info = await(pending)
+		tankCaches[name] = {
+			ttl = os.clock() + 1,
+			info = info,
+		}
+	end
+	return info
+end
+
+local function findFluidInTanks(fluid, amount)
+	local result = nil
+	local thrs = {}
+	for i, tank in ipairs({peripheral.find('fluidTank')}) do
+		thrs[i] = co_run(function()
+			if result then
+				return
+			end
+			local info = getTankInfo(tank)
+			if info.amount > amount and info.fluid == fluid then
+				result = peripheral.getName(tank)
+			end
+		end)
+	end
+	await(table.unpack(thrs))
+	return result
+end
+
+local function transferFluid(source, target, limit, fluid)
+	local amount
+	if peripheral.hasType(source, 'fluidTank') then
+		amount = peripheral.call(target, 'pullFluid', source, limit, fluid)
+	else
+		amount = peripheral.call(source, 'pushFluid', target, limit, fluid)
+	end
+	if amount == 0 then
+		return
+	end
+	do
+		local d = tankCaches[source]
+		if d and d.info then
+			local i = d.info
+			if i then
+				i.amount = i.amount - amount
+				if i.amount <= 0 then
+					d.info[fromSlot] = nil
+				end
+			end
+		end
+	end
+	if toSlot then
+		local d = tankCaches[target]
+		if d and d.info then
+			local i = d.info
+			if i then
+				i.amount = i.amount + amount
+			else
+				d.ttl = 0
+			end
+		end
+	end
+end
+
 local function onMaterialMissing(item)
 	basalt.log('Missing ' .. item.name)
 end
@@ -200,7 +350,7 @@ end
 --- allocCPU will alloc a craft processing unit and start to process the stage
 local function allocCPU(stage, source, last, item)
 	last = last or source
-	if stage.crafter == 'create:press' then
+	if stage.crafter == pressCrafterId then
 		local name, data = nil, nil
 		for n, d in pairs(mechanicalPresses) do
 			if not d.processing then
@@ -215,9 +365,9 @@ local function allocCPU(stage, source, last, item)
 			stage = stage,
 			item = item,
 		}
-		peripheral.call(name, 'pullItems', last, item.slot, 1)
+		transferItems(last, name, item.slot, 1)
 		return true, name, data.processing
-	elseif stage.crafter == 'create:deployer' then
+	elseif stage.crafter == deployerCrafterId then
 		local name, data = nil, nil
 		for n, d in pairs(deployers) do
 			if not d.processing then
@@ -233,18 +383,53 @@ local function allocCPU(stage, source, last, item)
 			item = item,
 		}
 		local _, res = await(function()
-			peripheral.call(name, 'pullItems', last, item.slot, 1, 1)
+			transferItems(last, name, item.slot, 1, 1)
 		end, function()
 			local deployerItemSlot = findItemInInventory(source, stage.operators.deployer)
 			if not deployerItemSlot then
 				return false
 			end
-			peripheral.call(data.deployer, 'pullItems', source, deployerItemSlot, 1, 1)
+			transferItems(source, data.deployer, deployerItemSlot, 1, 1)
 			return true
 		end)
 		if not res[1] then
 			-- push back the base material
-			peripheral.call(name, 'pushItems', last, 1)
+			transferItems(name, last, 1, 1)
+			return nil, 'ITEM_MISSING', stage.operators.deployer
+		end
+		return true, name, data.processing
+	elseif stage.crafter == spoutCrafterId then
+		local name, data = nil, nil
+		for n, d in pairs(spouts) do
+			if not d.processing then
+				name, data = n, d
+				break
+			end
+		end
+		if not name then
+			return nil, 'ERR_NO_CPU'
+		end
+		data.processing = {
+			stage = stage,
+			item = item,
+		}
+		local spoutFluid = stage.operators.spout
+		local _, res = await(function()
+			transferItems(last, name, item.slot, 1, 1)
+		end, function()
+			local sourceTank = findFluidInTanks(spoutFluid.fluid, spoutFluid.amount)
+			if not sourceTank then
+				return false
+			end
+			local needAmount = spoutFluid.amount
+			repeat
+				needAmount = needAmount - transferFluid(sourceTank, data.spout, needAmount, spoutFluid.fluid)
+			until needAmount <= 0
+			return true
+		end)
+		if not res[1] then
+			-- push back the base material
+			transferItems(name, last, 1, 1)
 			return nil, 'ITEM_MISSING', stage.operators.deployer
 		end
 		return true, name, data.processing
@@ -260,7 +445,7 @@ local function releaseCPU(name)
 	end
 end
 
-local function craftRecipe(source, targetInv, target, count)
+local function craftRecipe(source, targetInv, target)
 	local recipe = recipes[target]
 	if not recipe then
 		return nil, 'recipe not found'
@@ -274,48 +459,71 @@ local function craftRecipe(source, targetInv, target, count)
 		}
 		basalt.debug('found', item.name, 'at', itemSlot)
 	end
-	for i, stage in ipairs(recipe.stages) do
-		if lastCrafter and processing then
-			basalt.debug('waiting change')
-			local current
-			repeat
-				current = peripheral.call(lastCrafter, 'getItemDetail', 1)
-			until processing.item.name ~= current.name or processing.item.nbt ~= current.nbt
-			processing = current
-			basalt.debug('found change')
-		end
-		if lastStage and lastStage.crafter == stage.crafter then
-			if stage.crafter == 'create:deployer' then
-				local deployerItem = stage.operators.deployer
-				basalt.debug('finding', deployerItem.name)
-				local deployerItemSlot = findItemInInventory(source, deployerItem)
-				if not deployerItemSlot then
-					onMaterialMissing(deployerItem)
-					repeat
-						deployerItemSlot = findItemInInventory(source, deployerItem)
-					until deployerItemSlot
-				end
-				local pulled = peripheral.call(data.deployer, 'pullItems', source, deployerItemSlot, 1, 1)
-				basalt.debug('pulled', pulled)
+	local repeats = recipe.repeats or 1
+	for t = 1, repeats do
+		for i, stage in ipairs(recipe.stages) do
+			if lastCrafter and processing then
+				basalt.debug('waiting change', t, i)
+				local current
+				repeat
+					current = peripheral.call(lastCrafter, 'getItemDetail', 1)
+				until processing.item.name ~= current.name or processing.item.nbt ~= current.nbt
+				processing.item = current
 			end
-		else
-			local ok, name, item = allocCPU(stage, source, lastCrafter, processing.item)
-			if not ok then
-				if name == 'ITEM_MISSING' then
-					onMaterialMissing(item)
+			if lastStage and lastStage.crafter == stage.crafter then
+				if stage.crafter == deployerCrafterId then
+					local data = assert(deployers[lastCrafter])
+					if lastStage.operators.deployer.reusable then
+						transferItems(data.deployer, source, 1)
+					else
+						transferItems(data.deployer, targetInv, 1)
+					end
+					local deployerItem = stage.operators.deployer
+					basalt.debug('finding', deployerItem.name)
+					local deployerItemSlot = findItemInInventory(source, deployerItem)
+					if not deployerItemSlot then
+						onMaterialMissing(deployerItem)
+						repeat
+							deployerItemSlot = findItemInInventory(source, deployerItem)
+						until deployerItemSlot
+					end
+					transferItems(source, data.deployer, deployerItemSlot, 1, 1)
+				elseif stage.crafter == spoutCrafterId then
+					local data = assert(spouts[lastCrafter])
+					local spoutFluid = stage.operators.spout
+					basalt.debug('finding', spoutFluid.fluid)
+					local sourceTank
+					repeat
+						sourceTank = findFluidInTanks(spoutFluid.fluid, spoutFluid.amount)
+					until sourceTank
+					local needAmount = spoutFluid.amount
+					repeat
+						needAmount = needAmount - transferFluid(sourceTank, data.spout, needAmount, spoutFluid.fluid)
+					until needAmount <= 0
+				end
+			else
+				local ok, name, item = allocCPU(stage, source, lastCrafter, processing.item)
+				if not ok then
+					if name == 'ITEM_MISSING' then
+						onMaterialMissing(item)
+					end
 					repeat
 						ok, name, item = allocCPU(stage, source, lastCrafter, processing.item)
-					until ok or name ~= 'ITEM_MISSING'
+					until ok
 				end
-				if not ok then
-					return nil, name, item
-				end
+				releaseCPU(lastCrafter)
+				lastCrafter = name
+				processing = item
 			end
-			releaseCPU(lastCrafter)
-			lastCrafter = name
-			processing = item
+			lastStage = stage
 		end
-		lastStage = stage
+	end
+	if lastCrafter and processing then
+		local current
+		repeat
+			current = peripheral.call(lastCrafter, 'getItemDetail', 1)
+		until processing.item.name ~= current.name or processing.item.nbt ~= current.nbt
+		processing.item = current
 	end
 	if lastCrafter then
 		peripheral.call(targetInv, 'pullItems', lastCrafter, 1)
@@ -460,7 +668,7 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 	addCreatePressBtn:onClick(function(self, event, btn)
 		if event == 'mouse_click' and btn == 1 then
 			addCreatePressDepotList:clear()
-			peripheral.find(mechanicalPressDepotId, function(name)
+			peripheral.find(mechanicalPressDepotType, function(name)
 				if not isPeripheralRegistered(name) then
 					addCreatePressDepotList:addItem(name)
 				end
@@ -474,7 +682,7 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 			local item = addCreatePressDepotList:getItem(index)
 			if item then
 				addCrafter(crafterDir, {
-					type = 'create:press',
+					type = pressCrafterId,
 					name = item.text,
 				})
 				refreshCountLabels()
@@ -492,12 +700,12 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 		if event == 'mouse_click' and btn == 1 then
 			addCreateDeployerDepotList:clear()
 			addCreateDeployerList:clear()
-			peripheral.find(deployerDepotId, function(name)
+			peripheral.find(deployerDepotType, function(name)
 				if not isPeripheralRegistered(name) then
 					addCreateDeployerDepotList:addItem(name)
 				end
 			end)
-			peripheral.find(deployerId, function(name)
+			peripheral.find(deployerType, function(name)
 				if not isPeripheralRegistered(name) then
 					addCreateDeployerList:addItem(name)
 				end
@@ -511,7 +719,7 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 			local deployerDepot = addCreateDeployerDepotList:getItem(addCreateDeployerDepotList:getItemIndex())
 			if deployer and deployerDepot then
 				addCrafter(crafterDir, {
-					type = 'create:deployer',
+					type = deployerCrafterId,
 					name = deployerDepot.text,
 					deployer = deployer.text,
 				})
@@ -547,9 +755,13 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 				end
 				basalt.debug('crafting', target, count)
 				co_run(function()
-					local ok, err = craftRecipe(sourceInv, targetInv, target, count)
-					if not ok then
-						basalt.debug('craft failed', err)
+					inProgress[target] = (inProgress[target] or 0) + count
+					for t = 1, count do
+						local ok, err = craftRecipe(sourceInv, targetInv, target, count)
+						if not ok then
+							basalt.debug('craft failed', err)
+						end
+						inProgress[target] = inProgress[target] - 1
 					end
 				end)
 			end

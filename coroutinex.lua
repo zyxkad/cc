@@ -2,6 +2,25 @@
 -- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
+---- BEGIN debug ----
+
+local _eventLogFile = nil
+local _DEBUG_RESUME = false
+
+local function startDebug()
+	if _eventLogFile then
+		return true
+	end
+	local err
+	_eventLogFile, err = fs.open('crx.debug.log', 'w')
+	if not _eventLogFile then
+		return nil, err
+	end
+	return true
+end
+
+---- END debug ----
+
 local EMPTY_TABLE = {}
 
 local function execute(command, ...)
@@ -33,6 +52,22 @@ function Promise.__index(pm, key)
 		return pm._status
 	end
 	return Promise[key]
+end
+
+function Promise.__tostring(pm)
+	local s = 'Promise{status='
+	if pm._status == Promise.PENDING then
+		s = s .. 'pending'
+	elseif pm._status == Promise.FULFILLED then
+		s = s .. 'fulfilled'
+	elseif pm._status == Promise.REJECTED then
+		s = s .. 'rejected'
+	else
+		s = s .. 'unknown ' .. tostring(pm._status)
+	end
+	s = s .. ', ' .. tostring(pm._native)
+	s = s .. '}'
+	return s
 end
 
 local function newPromise(thread)
@@ -295,6 +330,10 @@ local function main(...)
 				keepLoop = true
 				-- only pass internal event when asked to
 				if eventFilter[r] == nil and (not eventType or string.sub(eventType, 1, 1) ~= '#') or eventFilter[r] == eventType then
+					if _eventLogFile and _DEBUG_RESUME then
+						_eventLogFile.write(string.format('%.02f resuming %s\n', os.clock(), r))
+						_eventLogFile.flush()
+					end
 					eventFilter[r] = nil
 					local next = eventData
 					repeat
@@ -311,6 +350,10 @@ local function main(...)
 							routines[r] = nil
 							r._status = Promise.REJECTED
 							r._result = data
+							if _eventLogFile then
+								_eventLogFile.write(string.format('%.02f error %s\n  %s\n', os.clock(), r, tostring(data)))
+								_eventLogFile.flush()
+							end
 							queueInternalEvent(eventCoroutineDone, r, false, data)
 						else
 							local isDead = coroutine.status(rn) == 'dead'
@@ -320,6 +363,10 @@ local function main(...)
 								r._status = Promise.FULFILLED
 								local ret = table.pack(table.unpack(res, 2, res.n))
 								r._result = ret
+								if _eventLogFile then
+									_eventLogFile.write(string.format('%.02f done %s %s\n', os.clock(), r, textutils.serialize(ret, { compact = true, allow_repetitions = true })))
+									_eventLogFile.flush()
+								end
 								queueInternalEvent(eventCoroutineDone, r, true, ret)
 							elseif type(data) == 'string' then
 								if data == '#crx_tick' then
@@ -408,6 +455,14 @@ local function main(...)
 						flag = false
 					end
 				else
+					if _eventLogFile then
+						local ok, str = pcall(textutils.serialize, eventData, { compact = true, allow_repetitions = true })
+						if not ok then
+							str = string.format('%s %s', textutils.serialize(tostring(eventData[1])), tostring(eventData[2]))
+						end
+						_eventLogFile.write(string.format('%.02f %s\n', os.clock(), str))
+						_eventLogFile.flush()
+					end
 					local l = eventListeners[eventData[1]]
 					if l then
 						for _, d in pairs(l) do
@@ -587,4 +642,6 @@ return {
 
 	newThreadPool = newThreadPool,
 	newLock = newLock,
+
+	startDebug = startDebug,
 }

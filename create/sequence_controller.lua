@@ -169,19 +169,18 @@ local function findItemInInventory(inv, target)
 		local d = listCaches[inv]
 		if d then
 			if d.pending then
-				local res = await(d.pending)
-				list = res[1]
+				list = await(d.pending)[1]
 			elseif d.ttl > os.clock() then
 				list = d.list
 			end
 		end
 	end
 	if not list then
-		pending = co_run(function() return peripheral.call(inv, 'list') end)
+		pending = co_run(peripheral.call, inv, 'list')
 		listCaches[inv] = {
 			pending = pending,
 		}
-		list = await(pending)
+		list = await(pending)[1]
 		listCaches[inv] = {
 			ttl = os.clock() + 1,
 			list = list,
@@ -235,7 +234,7 @@ end
 local function transferItems(source, target, fromSlot, toSlot, limit)
 	local count = peripheral.call(source, 'pushItems', target, fromSlot, limit, toSlot)
 	if count == 0 then
-		return
+		return 0
 	end
 	do
 		local d = listCaches[source]
@@ -260,6 +259,7 @@ local function transferItems(source, target, fromSlot, toSlot, limit)
 			end
 		end
 	end
+	return count
 end
 
 local function getTankInfo(tank)
@@ -284,7 +284,7 @@ local function getTankInfo(tank)
 		info = await(pending)
 		tankCaches[name] = {
 			ttl = os.clock() + 1,
-			info = info,
+			info = info[1],
 		}
 	end
 	return info
@@ -316,7 +316,7 @@ local function transferFluid(source, target, limit, fluid)
 		amount = peripheral.call(source, 'pushFluid', target, limit, fluid)
 	end
 	if amount == 0 then
-		return
+		return 0
 	end
 	do
 		local d = tankCaches[source]
@@ -341,10 +341,23 @@ local function transferFluid(source, target, limit, fluid)
 			end
 		end
 	end
+	return amount
 end
 
 local function onMaterialMissing(item)
 	basalt.log('Missing ' .. item.name)
+end
+
+local function repeatFindItemInInventory(source, target)
+	local slot, item = findItemInInventory(source, target)
+	if not slot then
+		onMaterialMissing(target)
+		repeat
+			crx.nextTick()
+			slot, item = findItemInInventory(source, target)
+		until slot
+	end
+	return slot, item
 end
 
 --- allocCPU will alloc a craft processing unit and start to process the stage
@@ -359,13 +372,16 @@ local function allocCPU(stage, source, last, item)
 			end
 		end
 		if not name then
-			return nil, 'ERR_NO_CPU'
+			return false, 'ERR_NO_CPU'
 		end
 		data.processing = {
 			stage = stage,
 			item = item,
 		}
-		transferItems(last, name, item.slot, 1)
+		if transferItems(last, name, item.slot, 1, 1) == 0 then
+			data.processing = nil
+			return false, 'ERR_LAST_EMPTY'
+		end
 		return true, name, data.processing
 	elseif stage.crafter == deployerCrafterId then
 		local name, data = nil, nil
@@ -376,26 +392,43 @@ local function allocCPU(stage, source, last, item)
 			end
 		end
 		if not name then
-			return nil, 'ERR_NO_CPU'
+			return false, 'ERR_NO_CPU'
 		end
 		data.processing = {
 			stage = stage,
 			item = item,
 		}
+		local err = nil
 		local _, res = await(function()
-			transferItems(last, name, item.slot, 1, 1)
-		end, function()
-			local deployerItemSlot = findItemInInventory(source, stage.operators.deployer)
-			if not deployerItemSlot then
-				return false
+			if transferItems(last, name, item.slot, 1, 1) == 0 then
+				err = 'ERR_LAST_EMPTY'
 			end
-			transferItems(source, data.deployer, deployerItemSlot, 1, 1)
-			return true
+		end, function()
+			while not err do
+				local deployerItemSlot = findItemInInventory(source, stage.operators.deployer)
+				if not deployerItemSlot then
+					return false
+				end
+				if err then
+					break
+				end
+				if transferItems(source, data.deployer, deployerItemSlot, 1, 1) > 0 then
+					return true
+				end
+			end
 		end)
+		if err then
+			data.processing = nil
+			return false, err
+		end
 		if not res[1] then
-			-- push back the base material
-			transferItems(name, last, 1, 1)
-			return nil, 'ITEM_MISSING', stage.operators.deployer
+			-- push back the materials
+			await(
+				co_run(transferItems, name, last, 1, 1),
+				co_run(transferItems, data.deployer, source, 1)
+			)
+			data.processing = nil
+			return false, 'ITEM_MISSING', stage.operators.deployer
 		end
 		return true, name, data.processing
 	elseif stage.crafter == spoutCrafterId then
@@ -407,15 +440,18 @@ local function allocCPU(stage, source, last, item)
 			end
 		end
 		if not name then
-			return nil, 'ERR_NO_CPU'
+			return false, 'ERR_NO_CPU'
 		end
 		data.processing = {
 			stage = stage,
 			item = item,
 		}
 		local spoutFluid = stage.operators.spout
+		local err = nil
 		local _, res = await(function()
-			transferItems(last, name, item.slot, 1, 1)
+			if transferItems(last, name, item.slot, 1, 1) == 0 then
+				err = 'ERR_LAST_EMPTY'
+			end
 		end, function()
 			local sourceTank = findFluidInTanks(spoutFluid.fluid, spoutFluid.amount)
 			if not sourceTank then
@@ -427,10 +463,18 @@ local function allocCPU(stage, source, last, item)
 			until needAmount <= 0
 			return true
 		end)
+		if err then
+			data.processing = nil
+			return false, err
+		end
 		if not res[1] then
 			-- push back the base material
-			transferItems(name, last, 1, 1)
-			return nil, 'ITEM_MISSING', stage.operators.deployer
+			await(
+				co_run(transferItems, name, last, 1, 1),
+				co_run(transferFluid, data.spout, sourceTank)
+			)
+			data.processing = nil
+			return false, 'ITEM_MISSING', stage.operators.deployer
 		end
 		return true, name, data.processing
 	else
@@ -439,7 +483,7 @@ local function allocCPU(stage, source, last, item)
 end
 
 local function releaseCPU(name)
-	local data = mechanicalPresses[name] or deployers[name]
+	local data = mechanicalPresses[name] or deployers[name] or spouts[name]
 	if data then
 		data.processing = nil
 	end
@@ -448,17 +492,9 @@ end
 local function craftRecipe(source, targetInv, target)
 	local recipe = recipes[target]
 	if not recipe then
-		return nil, 'recipe not found'
+		return 0, 'recipe not found'
 	end
 	local lastStage, lastCrafter, processing
-	do
-		local itemSlot, item = findItemInInventory(source, recipe.initItem)
-		item.slot = itemSlot
-		processing = {
-			item = item,
-		}
-		basalt.debug('found', item.name, 'at', itemSlot)
-	end
 	local repeats = recipe.repeats or 1
 	for t = 1, repeats do
 		for i, stage in ipairs(recipe.stages) do
@@ -467,8 +503,8 @@ local function craftRecipe(source, targetInv, target)
 				local current
 				repeat
 					current = peripheral.call(lastCrafter, 'getItemDetail', 1)
-				until processing.item.name ~= current.name or processing.item.nbt ~= current.nbt
-				processing.item = current
+				until processing.name ~= current.name or processing.nbt ~= current.nbt
+				processing = current
 			end
 			if lastStage and lastStage.crafter == stage.crafter then
 				if stage.crafter == deployerCrafterId then
@@ -479,15 +515,9 @@ local function craftRecipe(source, targetInv, target)
 						transferItems(data.deployer, targetInv, 1)
 					end
 					local deployerItem = stage.operators.deployer
-					basalt.debug('finding', deployerItem.name)
-					local deployerItemSlot = findItemInInventory(source, deployerItem)
-					if not deployerItemSlot then
-						onMaterialMissing(deployerItem)
-						repeat
-							deployerItemSlot = findItemInInventory(source, deployerItem)
-						until deployerItemSlot
-					end
-					transferItems(source, data.deployer, deployerItemSlot, 1, 1)
+					repeat
+						local deployerItemSlot = repeatFindItemInInventory(source, deployerItem)
+					until transferItems(source, data.deployer, deployerItemSlot, 1, 1) > 0
 				elseif stage.crafter == spoutCrafterId then
 					local data = assert(spouts[lastCrafter])
 					local spoutFluid = stage.operators.spout
@@ -502,30 +532,48 @@ local function craftRecipe(source, targetInv, target)
 					until needAmount <= 0
 				end
 			else
-				local ok, name, item = allocCPU(stage, source, lastCrafter, processing.item)
+				local firstIter = t == 1 and i == 1
+				if firstIter then
+					local slot, item2 = repeatFindItemInInventory(source, recipe.initItem)
+					item2.slot = slot
+					processing = item2
+					basalt.debug('found', item2.name, 'at', slot)
+				end
+				local ok, name, item = allocCPU(stage, source, lastCrafter, processing)
 				if not ok then
 					if name == 'ITEM_MISSING' then
 						onMaterialMissing(item)
 					end
 					repeat
-						ok, name, item = allocCPU(stage, source, lastCrafter, processing.item)
+						crx.nextTick()
+						if firstIter and name == 'ERR_LAST_EMPTY' then
+							local slot, item2 = repeatFindItemInInventory(source, recipe.initItem)
+							item2.slot = slot
+							processing = item2
+							basalt.debug('found', item2.name, 'at', slot, os.clock())
+						end
+						basalt.debug('allocing CPU')
+						ok, name, item = allocCPU(stage, source, lastCrafter, processing)
+						basalt.debug('alloced', ok, name, item, os.clock())
 					until ok
 				end
-				releaseCPU(lastCrafter)
+				if lastCrafter then
+					releaseCPU(lastCrafter)
+				end
 				lastCrafter = name
-				processing = item
+				processing = item.item
 			end
 			lastStage = stage
 		end
 	end
-	if lastCrafter and processing then
-		local current
-		repeat
-			current = peripheral.call(lastCrafter, 'getItemDetail', 1)
-		until processing.item.name ~= current.name or processing.item.nbt ~= current.nbt
-		processing.item = current
-	end
 	if lastCrafter then
+		if processing then
+			local current
+			repeat
+				current = peripheral.call(lastCrafter, 'getItemDetail', 1)
+			until processing.name ~= current.name or processing.nbt ~= current.nbt
+			processing = current
+		end
 		peripheral.call(targetInv, 'pullItems', lastCrafter, 1)
 		releaseCPU(lastCrafter)
 	end
@@ -547,6 +595,9 @@ local pressCountLabel = statsFrame:addLabel()
 local deployerCountLabel = statsFrame:addLabel()
 	:setText("Deployers %d")
 	:setPosition(1, 2)
+local spoutCountLabel = statsFrame:addLabel()
+	:setText("Spouts    %d")
+	:setPosition(1, 3)
 local recipeCountLabel = statsFrame:addLabel()
 	:setText("Total %d recipes")
 	:setPosition(1, 4)
@@ -560,6 +611,12 @@ local addCreatePressBtn = addBtnsFrame:addButton()
 	:setText("Add create:press   ")
 	:setSize(21, 1)
 	:setPosition(1, 2)
+	:setBackground(false)
+	:setForeground(false)
+local addCreateDeployerBtn = addBtnsFrame:addButton()
+	:setText("Add create:spout   ")
+	:setSize(21, 1)
+	:setPosition(1, 3)
 	:setBackground(false)
 	:setForeground(false)
 local addCreateDeployerBtn = addBtnsFrame:addButton()
@@ -641,6 +698,12 @@ local recipeList = mainFrame:addList()
 	:setPosition(3, 8)
 	:setBackground(colors.gray)
 	:setForeground(colors.white)
+local craftCountInput = mainFrame:addInput()
+	:setInputType("number")
+	:setDefaultText("count", colors.gray, colors.white)
+	:setPosition(39, 10)
+	:setBackground(colors.white)
+	:setForeground(colors.gray)
 local craftButton = mainFrame:addButton()
 	:setText("[Craft]")
 	:setPosition(39, 12)
@@ -662,6 +725,7 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 		recipeCountLabel:setText(string.format("%d recipes", tableCount(recipes)))
 		pressCountLabel:setText(string.format("Presses   %d", tableCount(mechanicalPresses)))
 		deployerCountLabel:setText(string.format("Deployers %d", tableCount(deployers)))
+		spoutCountLabel:setText(string.format("Spouts    %d", tableCount(spouts)))
 	end
 	refreshCountLabels()
 
@@ -749,21 +813,22 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 			local selected = recipeList:getItem(recipeList:getItemIndex())
 			if selected then
 				local target = selected.text
-				local count = 0
-				if count <= 0 then
+				local count = craftCountInput:getValue()
+				if type(count) ~= 'number' or count <= 0 then
 					count = btn == 2 and 16 or 1
 				end
+				count = math.floor(count + 0.5)
 				basalt.debug('crafting', target, count)
-				co_run(function()
-					inProgress[target] = (inProgress[target] or 0) + count
-					for t = 1, count do
+				inProgress[target] = (inProgress[target] or 0) + count
+				for t = 1, count do
+					co_run(function()
 						local ok, err = craftRecipe(sourceInv, targetInv, target, count)
 						if not ok then
 							basalt.debug('craft failed', err)
 						end
 						inProgress[target] = inProgress[target] - 1
-					end
-				end)
+					end)
+				end
 			end
 		end
 	end)
@@ -782,6 +847,10 @@ local function pullEvents()
 	if event == 'peripheral' then
 	elseif event == 'peripheral_detach' then
 	end
+end
+
+local function update()
+
 end
 
 function main(args)
@@ -812,6 +881,14 @@ function main(args)
 	end, function()
 		while true do
 			pullEvents()
+		end
+	end, function()
+		for name, data in pairs(deployers) do
+			co_run(transferItems, data.deployer, inputName, 1)
+		end
+		while true do
+			update()
+			sleep(0.1)
 		end
 	end)
 end

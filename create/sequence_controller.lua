@@ -230,10 +230,12 @@ local function findItemInInventory(inv, target)
 					if result then
 						return
 					end
-					for _, t in ipairs(target.tags) do
-						if tags[t] then
-							result = slot
-							return
+					if tags then
+						for _, t in ipairs(target.tags) do
+							if tags[t] then
+								result = slot
+								return
+							end
 						end
 					end
 				end)

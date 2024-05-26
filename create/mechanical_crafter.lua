@@ -139,10 +139,12 @@ local function findItemInInventory(inv, target)
 					if result then
 						return
 					end
-					for _, t in ipairs(target.tags) do
-						if tags[t] then
-							result = slot
-							return
+					if tags then
+						for _, t in ipairs(target.tags) do
+							if tags[t] then
+								result = slot
+								return
+							end
 						end
 					end
 				end)
@@ -240,8 +242,10 @@ local function craft(crafter, recipe, sourceInv)
 				local index = (y - 1) * crafter.matrix.width + x
 				local unit = crafter.matrix.units[index]
 				pool.queue(function()
-					local slot = repeatFindItemInInventory(sourceInv, item)
-					transferItems(sourceInv, unit, slot, 1, 1)
+					local slot
+					repeat
+						slot = repeatFindItemInInventory(sourceInv, item)
+					until transferItems(sourceInv, unit, slot, 1, 1) > 0
 				end)
 			end
 		end

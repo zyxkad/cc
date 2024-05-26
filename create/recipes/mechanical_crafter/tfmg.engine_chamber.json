@@ -1,0 +1,26 @@
+{
+	"type": "mechanical_crafter",
+	"output": "tfmg:engine_chamber",
+	"items": {
+		"P": {
+			"name": "tfmg:spark_plug",
+			"nbt": false
+		},
+		"S": {
+			"tags": ["forge:ingots/steel"]
+		},
+		"A": {
+			"tags": ["forge:ingots/aluminum"]
+		},
+		"M": {
+			"name": "tfmg:steel_mechanism",
+			"nbt": false
+		}
+	},
+	"pattern": [
+		"P",
+		"S",
+		"A",
+		"M"
+	]
+}

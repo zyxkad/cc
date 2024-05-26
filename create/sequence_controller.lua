@@ -2,7 +2,6 @@
 -- by zyxkad@gmail.com
 
 local crx = require('coroutinex')
-crx.startDebug()
 local co_main = crx.main
 local co_run = crx.run
 local await = crx.await
@@ -11,6 +10,34 @@ local awaitAny = crx.awaitAny
 wget run https://basalt.madefor.cc/install.lua packed
 ]]
 local basalt = require('basalt')
+
+local DEBUG = true
+local printDebug
+if DEBUG then
+	local debugLogFd = assert(fs.open('seq.debug.log', 'w'))
+	printDebug = function(...)
+		if not debugLogFd then
+			return
+		end
+		local line = string.format('%.02f', os.clock())
+		local vals = table.pack(...)
+		for i = 1, vals.n do
+			local v = vals[i]
+			if type(v) == 'table' then
+				local ok, w = pcall(textutils.serialize, v, { compact = true, allow_repetitions = true })
+				if ok then
+					v = w
+				end
+			end
+			line = line .. ' ' .. tostring(v)
+		end
+		debugLogFd.write(line)
+		debugLogFd.write('\n')
+		debugLogFd.flush()
+	end
+else
+	printDebug = function(...) end
+end
 
 -- crafters
 
@@ -94,7 +121,7 @@ end
 
 local function loadCrafterDir(dir)
 	for _, name in ipairs(fs.list(dir)) do
-		if name:match('[a-zA-Z0-9._-]+.json$') then
+		if name:match('^[a-zA-Z0-9._-]+.json$') then
 			local fd, err = fs.open(fs.combine(dir, name), 'r')
 			if fd then
 				local data = fd.readAll()
@@ -233,6 +260,7 @@ end
 
 local function transferItems(source, target, fromSlot, toSlot, limit)
 	local count = peripheral.call(source, 'pushItems', target, fromSlot, limit, toSlot)
+	printDebug('transferItems', source, fromSlot, target, toSlot, count)
 	if count == 0 then
 		return 0
 	end
@@ -424,7 +452,7 @@ local function allocCPU(stage, source, last, item)
 		if not res[1] then
 			-- push back the materials
 			await(
-				co_run(transferItems, name, last, 1, 1),
+				co_run(transferItems, name, last, 1),
 				co_run(transferItems, data.deployer, source, 1)
 			)
 			data.processing = nil
@@ -499,29 +527,36 @@ local function craftRecipe(source, targetInv, target)
 	for t = 1, repeats do
 		for i, stage in ipairs(recipe.stages) do
 			if lastCrafter and processing then
-				basalt.debug('waiting change', t, i)
+				printDebug('waiting change', t, i)
 				local current
 				repeat
 					current = peripheral.call(lastCrafter, 'getItemDetail', 1)
 				until processing.name ~= current.name or processing.nbt ~= current.nbt
+				printDebug('found change, from', processing, 'to', current)
 				processing = current
 			end
+			if lastStage and lastStage.crafter == deployerCrafterId then
+				local data = assert(deployers[lastCrafter])
+				if lastStage.operators.deployer.reusable then
+					printDebug('returning reusable tool')
+					transferItems(data.deployer, source, 1)
+				else
+					transferItems(data.deployer, targetInv, 1)
+				end
+			end
 			if lastStage and lastStage.crafter == stage.crafter then
+				printDebug('same crafter for', stage)
 				if stage.crafter == deployerCrafterId then
-					local data = assert(deployers[lastCrafter])
-					if lastStage.operators.deployer.reusable then
-						transferItems(data.deployer, source, 1)
-					else
-						transferItems(data.deployer, targetInv, 1)
-					end
+					local data = deployers[lastCrafter]
 					local deployerItem = stage.operators.deployer
+					printDebug('finding deployer item', deployerItem)
 					repeat
 						local deployerItemSlot = repeatFindItemInInventory(source, deployerItem)
 					until transferItems(source, data.deployer, deployerItemSlot, 1, 1) > 0
 				elseif stage.crafter == spoutCrafterId then
 					local data = assert(spouts[lastCrafter])
 					local spoutFluid = stage.operators.spout
-					basalt.debug('finding', spoutFluid.fluid)
+					printDebug('finding', spoutFluid)
 					local sourceTank
 					repeat
 						sourceTank = findFluidInTanks(spoutFluid.fluid, spoutFluid.amount)
@@ -537,7 +572,7 @@ local function craftRecipe(source, targetInv, target)
 					local slot, item2 = repeatFindItemInInventory(source, recipe.initItem)
 					item2.slot = slot
 					processing = item2
-					basalt.debug('found', item2.name, 'at', slot)
+					printDebug('found', item2, 'at', slot)
 				end
 				local ok, name, item = allocCPU(stage, source, lastCrafter, processing)
 				if not ok then
@@ -550,11 +585,11 @@ local function craftRecipe(source, targetInv, target)
 							local slot, item2 = repeatFindItemInInventory(source, recipe.initItem)
 							item2.slot = slot
 							processing = item2
-							basalt.debug('found', item2.name, 'at', slot, os.clock())
+							printDebug('found', item2, 'at', slot, os.clock())
 						end
-						basalt.debug('allocing CPU')
+						printDebug('allocing CPU')
 						ok, name, item = allocCPU(stage, source, lastCrafter, processing)
-						basalt.debug('alloced', ok, name, item, os.clock())
+						printDebug('alloced', ok, name, item, os.clock())
 					until ok
 				end
 				if lastCrafter then
@@ -573,6 +608,15 @@ local function craftRecipe(source, targetInv, target)
 				current = peripheral.call(lastCrafter, 'getItemDetail', 1)
 			until processing.name ~= current.name or processing.nbt ~= current.nbt
 			processing = current
+		end
+		if lastStage and lastStage.crafter == deployerCrafterId then
+			local data = assert(deployers[lastCrafter])
+			if lastStage.operators.deployer.reusable then
+				printDebug('returning reusable tool')
+				transferItems(data.deployer, source, 1)
+			else
+				transferItems(data.deployer, targetInv, 1)
+			end
 		end
 		peripheral.call(targetInv, 'pullItems', lastCrafter, 1)
 		releaseCPU(lastCrafter)
@@ -614,13 +658,13 @@ local addCreatePressBtn = addBtnsFrame:addButton()
 	:setBackground(false)
 	:setForeground(false)
 local addCreateDeployerBtn = addBtnsFrame:addButton()
-	:setText("Add create:spout   ")
+	:setText("Add create:deployer")
 	:setSize(21, 1)
 	:setPosition(1, 3)
 	:setBackground(false)
 	:setForeground(false)
-local addCreateDeployerBtn = addBtnsFrame:addButton()
-	:setText("Add create:deployer")
+local addCreateSpoutBtn = addBtnsFrame:addButton()
+	:setText("Add create:spout   ")
 	:setSize(21, 1)
 	:setPosition(1, 4)
 	:setBackground(false)
@@ -692,6 +736,44 @@ local addCreateDeployerCancelBtn = addCreateDeployerFrame:addButton()
 	:setBackground(false)
 	:setForeground(colors.red)
 
+local addCreateSpoutFrame = mainFrame:addFrame()
+	:setSize("parent.w - 6", "parent.h - 3")
+	:setPosition(4, 2)
+	:setVisible(false)
+	:setZIndex(999)
+addCreateSpoutFrame:addLabel()
+	:setText("Select depot")
+	:setSize(18, 1)
+	:setPosition(3, 3)
+local addCreateSpoutDepotList = addCreateSpoutFrame:addList()
+	:setScrollable(true)
+	:setSize(18, "parent.h - 6")
+	:setPosition(3, 4)
+	:setBackground(colors.lightGray)
+	:setForeground(colors.white)
+addCreateSpoutFrame:addLabel()
+	:setText("Select spout")
+	:setSize(22, 1)
+	:setPosition(22, 3)
+local addCreateSpoutList = addCreateSpoutFrame:addList()
+	:setScrollable(true)
+	:setSize(22, "parent.h - 6")
+	:setPosition(22, 4)
+	:setBackground(colors.lightGray)
+	:setForeground(colors.white)
+local addCreateSpoutConfirmBtn = addCreateSpoutFrame:addButton()
+	:setText("[Confirm]")
+	:setSize(9, 1)
+	:setPosition(7, "parent.h - 1")
+	:setBackground(false)
+	:setForeground(colors.green)
+local addCreateSpoutCancelBtn = addCreateSpoutFrame:addButton()
+	:setText("[Cancel]")
+	:setSize(8, 1)
+	:setPosition("parent.w - 8 - 7", "parent.h - 1")
+	:setBackground(false)
+	:setForeground(colors.red)
+
 local recipeList = mainFrame:addList()
 	:setScrollable(true)
 	:setSize(35, "parent.h - 9")
@@ -709,11 +791,16 @@ local craftButton = mainFrame:addButton()
 	:setPosition(39, 12)
 
 local function isPeripheralRegistered(name)
-	if mechanicalPresses[name] or deployers[name] then
+	if mechanicalPresses[name] or deployers[name] or spouts[name] then
 		return true
 	end
 	for _, data in pairs(deployers) do
 		if data.deployer == name then
+			return true
+		end
+	end
+	for _, data in pairs(spouts) do
+		if data.spout == name then
 			return true
 		end
 	end
@@ -798,6 +885,44 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 		end
 	end)
 
+	addCreateSpoutBtn:onClick(function(self, event, btn)
+		if event == 'mouse_click' and btn == 1 then
+			addCreateSpoutDepotList:clear()
+			addCreateSpoutList:clear()
+			peripheral.find(spoutDepotType, function(name)
+				if not isPeripheralRegistered(name) then
+					addCreateSpoutDepotList:addItem(name)
+				end
+			end)
+			peripheral.find(spoutType, function(name)
+				if not isPeripheralRegistered(name) then
+					addCreateSpoutList:addItem(name)
+				end
+			end)
+			addCreateSpoutFrame:setVisible(true)
+		end
+	end)
+	addCreateSpoutConfirmBtn:onClick(function(self, event, btn)
+		if event == 'mouse_click' and btn == 1 then
+			local spout = addCreateSpoutList:getItem(addCreateSpoutList:getItemIndex())
+			local spoutDepot = addCreateSpoutDepotList:getItem(addCreateSpoutDepotList:getItemIndex())
+			if spout and spoutDepot then
+				addCrafter(crafterDir, {
+					type = spoutCrafterId,
+					name = spoutDepot.text,
+					spout = spout.text,
+				})
+				refreshCountLabels()
+			end
+			addCreateSpoutFrame:setVisible(false)
+		end
+	end)
+	addCreateSpoutCancelBtn:onClick(function(self, event, btn)
+		if event == 'mouse_click' and btn == 1 then
+			addCreateSpoutFrame:setVisible(false)
+		end
+	end)
+
 	local craftables = {}
 	for name, _ in pairs(recipes) do
 		craftables[#craftables + 1] = name
@@ -818,13 +943,13 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 					count = btn == 2 and 16 or 1
 				end
 				count = math.floor(count + 0.5)
-				basalt.debug('crafting', target, count)
+				printDebug('crafting', target, count)
 				inProgress[target] = (inProgress[target] or 0) + count
 				for t = 1, count do
 					co_run(function()
 						local ok, err = craftRecipe(sourceInv, targetInv, target, count)
 						if not ok then
-							basalt.debug('craft failed', err)
+							printDebug('craft failed', err)
 						end
 						inProgress[target] = inProgress[target] - 1
 					end)

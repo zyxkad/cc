@@ -1,5 +1,6 @@
 {
 	"type": "sequence",
+	"output": "create:andesite_casing",
 	"initItem": {
 		"tags": ["forge:stripped_logs"]
 	},
@@ -13,6 +14,5 @@
 				}
 			}
 		}
-	],
-	"output": "create:andesite_casing"
+	]
 }

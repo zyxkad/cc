@@ -1,0 +1,31 @@
+{
+	"type": "mechanical_crafter",
+	"output": "tfmg:pumpjack_base",
+	"items": {
+		"T": {
+			"name": "minecraft:string",
+			"nbt": false
+		},
+		"M": {
+			"name": "tfmg:steel_mechanism",
+			"nbt": false
+		},
+		"P": {
+			"name": "tfmg:heavy_plate",
+			"nbt": false
+		},
+		"C": {
+			"name": "tfmg:heavy_machinery_casing",
+			"nbt": false
+		},
+		"I": {
+			"name": "tfmg:steel_fluid_tank",
+			"nbt": false
+		}
+	},
+	"pattern": [
+		"PTP",
+		"MCM",
+		"PIP"
+	]
+}

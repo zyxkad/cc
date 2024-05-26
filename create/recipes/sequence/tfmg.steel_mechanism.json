@@ -1,0 +1,44 @@
+{
+	"type": "sequence",
+	"output": "tfmg:steel_mechanism",
+	"initItem": {
+		"name": "tfmg:heavy_plate",
+	},
+	"repeats": 2,
+	"stages": [
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"tags": ["forge:ingots/steel"]
+				}
+			}
+		},
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"tags": ["forge:ingots/aluminum"]
+				}
+			}
+		},
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"name": "tfmg:screw"
+				}
+			}
+		},
+		{
+			"crafter": "create:deployer",
+			"operators": {
+				"deployer": {
+					"name": "tfmg:screwdriver",
+					"nbt": false,
+					"reusable": true
+				}
+			}
+		}
+	]
+}

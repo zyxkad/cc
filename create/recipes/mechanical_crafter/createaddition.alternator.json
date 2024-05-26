@@ -1,0 +1,31 @@
+{
+	"type": "mechanical_crafter",
+	"output": "createaddition:alternator",
+	"items": {
+		"P": {
+			"tags": ["forge:plates/iron"],
+			"nbt": false
+		},
+		"S": {
+			"name": "createaddition:copper_spool",
+			"nbt": false
+		},
+		"A": {
+			"name": "create:andesite_alloy",
+			"nbt": false
+		},
+		"R": {
+			"tags": ["forge:rods/iron"]
+		},
+		"C": {
+			"name": "createaddition:capacitor",
+			"nbt": false
+		}
+	},
+	"pattern": [
+		"  A  ",
+		" PSP ",
+		"PSRSP",
+		" PCP "
+	]
+}

@@ -1,0 +1,36 @@
+{
+	"type": "mechanical_crafter",
+	"output": "tfmg:diesel_engine",
+	"items": {
+		"S": {
+			"tags": ["forge:ingots/steel"]
+		},
+		"A": {
+			"tags": ["forge:ingots/aluminum"]
+		},
+		"M": {
+			"name": "tfmg:steel_mechanism",
+			"nbt": false
+		},
+		"P": {
+			"name": "tfmg:heavy_plate",
+			"nbt": false
+		},
+		"C": {
+			"name": "tfmg:heavy_machinery_casing",
+			"nbt": false
+		},
+		"T": {
+			"name": "tfmg:steel_fluid_tank",
+			"nbt": false
+		}
+	},
+	"pattern": [
+		" S ",
+		" A ",
+		"ASA",
+		"MCM",
+		"MTM",
+		"PPP"
+	]
+}

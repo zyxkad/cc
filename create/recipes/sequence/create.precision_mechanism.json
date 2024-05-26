@@ -1,5 +1,6 @@
 {
 	"type": "sequence",
+	"output": "create:precision_mechanism",
 	"initItem": {
 		"name": "create:golden_sheet",
 		"nbt": false
@@ -33,6 +34,5 @@
 				}
 			}
 		}
-	],
-	"output": "create:precision_mechanism"
+	]
 }

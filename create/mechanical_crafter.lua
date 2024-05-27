@@ -56,7 +56,7 @@ local function loadCrafterDir(dir)
 end
 
 local function loadRecipe(recipe)
-	if recipe.type == 'mechanical_crafter' then
+	if recipe.type == 'mechanical_crafter' or recipe.type == 'crafter' then
 		recipes[recipe.output] = recipe
 	end
 end

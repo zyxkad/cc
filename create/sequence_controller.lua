@@ -203,7 +203,7 @@ local function findItemInInventory(inv, target)
 		end
 	end
 	if not list then
-		pending = co_run(peripheral.call, inv, 'list')
+		local pending = co_run(peripheral.call, inv, 'list')
 		listCaches[inv] = {
 			pending = pending,
 		}
@@ -299,25 +299,34 @@ local function getTankInfo(tank)
 		local d = tankCaches[name]
 		if d then
 			if d.pending then
-				local res = await(d.pending)
-				info = res[1]
+				info = await(d.pending)[1]
 			elseif d.ttl > os.clock() then
 				info = d.info
 			end
 		end
 	end
-	if not info then
-		pending = co_run(tank.getInfo)
-		tankCaches[name] = {
-			pending = pending,
-		}
-		info = await(pending)
-		tankCaches[name] = {
-			ttl = os.clock() + 1,
-			info = info[1],
-		}
+	if info then
+		return info
 	end
-	return info
+	while true do
+		if tankCaches[name] and tankCaches[name].pending then
+			info = await(tankCaches[name].pending)[1]
+		else
+			local pending = co_run(tank.getInfo)
+			tankCaches[name] = {
+				pending = pending,
+			}
+			info = await(pending)[1]
+			tankCaches[name] = {
+				ttl = os.clock() + 1,
+				info = info,
+			}
+		end
+		if info then
+			return info
+		end
+		crx.nextTick()
+	end
 end
 
 local function findFluidInTanks(fluid, amount)
@@ -345,6 +354,7 @@ local function transferFluid(source, target, limit, fluid)
 	else
 		amount = peripheral.call(source, 'pushFluid', target, limit, fluid)
 	end
+	printDebug('transferFluid', source, target, fluid, amount)
 	if amount == 0 then
 		return 0
 	end
@@ -375,7 +385,7 @@ local function transferFluid(source, target, limit, fluid)
 end
 
 local function onMaterialMissing(item)
-	basalt.log('Missing ' .. item.name)
+	basalt.log('Missing ' .. textutils.serialize(item, { compact = true }))
 end
 
 local function repeatFindItemInInventory(source, target)
@@ -477,27 +487,12 @@ local function allocCPU(stage, source, last, item)
 			item = item,
 		}
 		local spoutFluid = stage.operators.spout
-		local err = nil
-		local _, res = await(function()
-			if transferItems(last, name, item.slot, 1, 1) == 0 then
-				err = 'ERR_LAST_EMPTY'
-			end
-		end, function()
-			local sourceTank = findFluidInTanks(spoutFluid.fluid, spoutFluid.amount)
-			if not sourceTank then
-				return false
-			end
-			local needAmount = spoutFluid.amount
-			repeat
-				needAmount = needAmount - transferFluid(sourceTank, data.spout, needAmount, spoutFluid.fluid)
-			until needAmount <= 0
-			return true
-		end)
-		if err then
+		if transferItems(last, name, item.slot, 1, 1) == 0 then
 			data.processing = nil
-			return false, err
+			return false, 'ERR_LAST_EMPTY'
 		end
-		if not res[1] then
+		local sourceTank = findFluidInTanks(spoutFluid.fluid, spoutFluid.amount)
+		if not sourceTank then
 			-- push back the base material
 			await(
 				co_run(transferItems, name, last, 1, 1),
@@ -506,6 +501,10 @@ local function allocCPU(stage, source, last, item)
 			data.processing = nil
 			return false, 'ITEM_MISSING', stage.operators.deployer
 		end
+		local needAmount = spoutFluid.amount
+		repeat
+			needAmount = needAmount - transferFluid(sourceTank, data.spout, needAmount, spoutFluid.fluid)
+		until needAmount <= 0
 		return true, name, data.processing
 	else
 		error('Unexpected crafter type ' .. stage.crafter)
@@ -589,9 +588,9 @@ local function craftRecipe(source, targetInv, target)
 							processing = item2
 							printDebug('found', item2, 'at', slot, os.clock())
 						end
-						printDebug('allocing CPU')
+						-- printDebug('allocing CPU')
 						ok, name, item = allocCPU(stage, source, lastCrafter, processing)
-						printDebug('alloced', ok, name, item, os.clock())
+						-- printDebug('alloced', ok, name, item, os.clock())
 					until ok
 				end
 				if lastCrafter then
@@ -941,14 +940,16 @@ local function initTUI(crafterDir, recipeDir, sourceInv, targetInv)
 			if selected then
 				local target = selected.text
 				local count = craftCountInput:getValue()
+				craftCountInput:setValue('')
 				if type(count) ~= 'number' or count <= 0 then
 					count = btn == 2 and 16 or 1
 				end
 				count = math.floor(count + 0.5)
 				printDebug('crafting', target, count)
+				local pool = crx.newThreadPool(32)
 				inProgress[target] = (inProgress[target] or 0) + count
 				for t = 1, count do
-					co_run(function()
+					pool.queue(function()
 						local ok, err = craftRecipe(sourceInv, targetInv, target, count)
 						if not ok then
 							printDebug('craft failed', err)

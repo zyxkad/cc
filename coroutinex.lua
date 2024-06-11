@@ -5,6 +5,7 @@
 ---- BEGIN debug ----
 
 local _eventLogFile = nil
+local _DEBUG_EVENT = false
 local _DEBUG_RESUME = false
 
 local function startDebug()
@@ -17,6 +18,29 @@ local function startDebug()
 		return nil, err
 	end
 	return true
+end
+
+settings.define('coroutinex.debug', {
+	description = 'Enable debug log for coroutinex',
+	default = false,
+	type = 'boolean',
+})
+settings.define('coroutinex.debug.event', {
+	description = 'Record event',
+	default = false,
+	type = 'boolean',
+})
+settings.define('coroutinex.debug.resume', {
+	description = 'Record thread resume',
+	default = false,
+	type = 'boolean',
+})
+settings.save()
+
+if settings.get('coroutinex.debug', false) then
+	_DEBUG_EVENT = settings.get('coroutinex.debug.event', false)
+	_DEBUG_RESUME = settings.get('coroutinex.debug.resume', false)
+	startDebug()
 end
 
 ---- END debug ----
@@ -363,7 +387,7 @@ local function main(...)
 								r._status = Promise.FULFILLED
 								local ret = table.pack(table.unpack(res, 2, res.n))
 								r._result = ret
-								if _eventLogFile then
+								if _eventLogFile and _DEBUG_RESUME then
 									_eventLogFile.write(string.format('%.02f done %s %s\n', os.clock(), r, textutils.serialize(ret, { compact = true, allow_repetitions = true })))
 									_eventLogFile.flush()
 								end
@@ -455,7 +479,7 @@ local function main(...)
 						flag = false
 					end
 				else
-					if _eventLogFile then
+					if _eventLogFile and _DEBUG_EVENT then
 						local ok, str = pcall(textutils.serialize, eventData, { compact = true, allow_repetitions = true })
 						if not ok then
 							str = string.format('%s %s', textutils.serialize(tostring(eventData[1])), tostring(eventData[2]))
@@ -484,6 +508,7 @@ end
 local eventPoolTasksDone = '#crx_pool_tasks_done'
 
 local function newThreadPool(limit)
+	assert(type(limit) == 'number', 'Thread pool limit must be a number')
 	local count = 0
 	local running = {}
 	local waiting = {}

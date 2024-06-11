@@ -340,7 +340,7 @@ local function onCommand(cfgData, player, msg)
 				contents = {
 					id = item.name,
 					count = item.count,
-					nbt = textutils.serialiseJSON(item.nbt, { nbt_style=true }),
+					tag = textutils.serialiseJSON(item.nbt, { nbt_style=true }),
 				},
 			},
 		}), player, '<>')

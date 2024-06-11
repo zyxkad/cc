@@ -1,0 +1,16 @@
+{
+	"type": "mechanical_crafter",
+	"output": "tfmg:spark_plug",
+	"items": {
+		"F": {
+			"name": "minecraft:flint"
+		},
+		"A": {
+			"tags": ["forge:ingots/aluminum"]
+		}
+	},
+	"pattern": [
+		"F",
+		"A"
+	]
+}

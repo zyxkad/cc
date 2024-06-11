@@ -1,0 +1,45 @@
+{
+	"type": "mechanical_crafter",
+	"output": "tfmg:large_radial_engine",
+	"items": {
+		"C": {
+			"name": "tfmg:engine_chamber",
+			"nbt": false
+		},
+		"T": {
+			"name": "tfmg:heavy_plate",
+			"nbt": false
+		},
+		"M": {
+			"name": "tfmg:steel_mechanism",
+			"nbt": false
+		},
+		"P": {
+			"name": "tfmg:steel_pipe",
+			"nbt": false
+		},
+		"E": {
+			"name": "tfmg:exhaust",
+			"nbt": false
+		},
+		"H": {
+			"name": "tfmg:heavy_machinery_casing",
+			"nbt": false
+		},
+		"S": {
+			"name": "create:shaft",
+			"nbt": false
+		},
+		"B": {
+			"name": "tfmg:lubrication_oil_bucket",
+			"nbt": false
+		}
+	},
+	"pattern": [
+		" CTC ",
+		"CMBMC",
+		"EPHPE",
+		"CTSTC",
+		" CTC "
+	]
+}

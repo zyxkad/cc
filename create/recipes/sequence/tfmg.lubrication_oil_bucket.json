@@ -1,0 +1,20 @@
+{
+	"type": "sequence",
+	"output": "tfmg:lubrication_oil_bucket",
+	"initItem": {
+		"name": "minecraft:bucket",
+		"nbt": false
+	},
+	"repeats": 1,
+	"stages": [
+		{
+			"crafter": "create:spout",
+			"operators": {
+				"spout": {
+					"fluid": "tfmg:lubrication_oil",
+					"amount": 1000
+				}
+			}
+		}
+	]
+}

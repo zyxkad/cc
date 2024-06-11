@@ -128,7 +128,12 @@ local function renderDataPocket()
 	local i = DATA_OFFSET
 	term.setTextColor(colors.white)
 	term.setBackgroundColor(colors.black)
+	local dataList = {}
 	for _, d in pairs(datas) do
+		dataList[#dataList + 1] = d
+	end
+	table.sort(dataList, function(a, b) return a.t > b.t end)
+	for _, d in ipairs(dataList) do
 		termUpdateAt(term, 1, i, string.format(' - %s', d.name))
 		termUpdateAt(term, 1, i + 1, string.format(' | %s %s %s', d.x, d.y, d.z))
 		termUpdateAt(term, 1, i + 2, string.format(' | %s | %s', formatTime(d.t), tostring(d.fuel)))

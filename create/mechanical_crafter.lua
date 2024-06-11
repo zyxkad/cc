@@ -202,7 +202,7 @@ local function transferItems(source, target, fromSlot, toSlot, limit)
 end
 
 local function onMaterialMissing(item)
-	basalt.log('Missing ' .. item.name)
+	printDebug('Missing ' .. item.name)
 end
 
 local function repeatFindItemInInventory(source, target)

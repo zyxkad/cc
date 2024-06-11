@@ -11,7 +11,7 @@ local co_main = crx.main
 
 local network = require('network')
 
-local modem = peripheral.find('modem', function(_, modem) return peripheral.hasType(modem, 'peripheral_hub') end)
+local modem = peripheral.find('peripheral_hub')
 local localName = modem.getNameLocal()
 
 -- recipe example
@@ -57,7 +57,7 @@ local function cmdCraft(reply, source, recipe, count)
 
 	-- take item to local storage
 	for i = 0, 2 do
-		local line = recipe.grid[i]
+		local line = recipe.grid[i + 1]
 		for j = 1, 3 do
 			local slot = line:sub(j, j)
 			if #slot ~= 0 then

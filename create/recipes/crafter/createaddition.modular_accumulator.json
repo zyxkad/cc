@@ -1,0 +1,27 @@
+{
+	"type": "crafter",
+	"output": "createaddition:modular_accumulator",
+	"items": {
+		"R": {
+			"name": "createaddition:copper_rod",
+			"nbt": false
+		},
+		"W": {
+			"name": "createaddition:gold_wire",
+			"nbt": false
+		},
+		"C": {
+			"name": "createaddition:capacitor",
+			"nbt": false
+		},
+		"B": {
+			"name": "create:brass_casing",
+			"nbt": false
+		}
+	},
+	"pattern": [
+		" R ",
+		"CBC",
+		" W"
+	]
+}

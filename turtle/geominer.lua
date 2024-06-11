@@ -39,9 +39,9 @@ local lavaBucketId = 'minecraft:lava_bucket'
 
 ---- BEGIN CONFIG ----
 
-local currentLevel = 82
+local currentLevel = assert(tonumber(arg[1]), 'the #1 arg is home Y level')
 
-local maxLevel = 13 - currentLevel
+local maxLevel = 30 - currentLevel
 local minLevel = -30 - currentLevel
 
 if turtleLabel:find('nether') then
@@ -49,15 +49,26 @@ if turtleLabel:find('nether') then
 	minLevel = 6 - currentLevel
 end
 
+local coalTag = 'minecraft:block/forge:ores/coal'
+
 local targetOres = {
 	['#minecraft:block/forge:ores/netherite_scrap'] = 100,
 	['#minecraft:block/forge:ores/diamond'] = 10,
 	['#minecraft:block/forge:ores/gold'] = 5,
-	['#minecraft:block/forge:ores/iron'] = 5,
-	['#minecraft:block/forge:ores/zinc'] = 3,
+	-- ['#minecraft:block/forge:ores/iron'] = 5,
+	-- ['#minecraft:block/forge:ores/zinc'] = 3,
+	['#minecraft:block/forge:ores/lapis'] = 4,
 	['#minecraft:block/forge:ores/redstone'] = 2,
 	-- ['#minecraft:block/forge:ores/copper'] = 1,
 	['#minecraft:block/forge:ores/coal'] = 1,
+
+	['ad_astra:moon_desh_ore'] = 6,
+	['ad_astra:deepslate_desh_ore'] = 6,
+	['ad_astra:mars_ostrum_ore'] = 6,
+	['ad_astra:deepslate_ostrum_ore'] = 6,
+	['ad_astra:venus_calorite_ore'] = 6,
+	['ad_astra:deepslate_calorite_ore'] = 6,
+	-- ['ad_astra:glacio_ice_shard_ore'] = 1,
 }
 local targetItems = {
 	['minecraft:ancient_debris'] = 1,
@@ -66,10 +77,22 @@ local targetItems = {
 	['minecraft:raw_iron'] = 1,
 	['minecraft:raw_gold'] = 1,
 	['minecraft:gold_nugget'] = 1,
+	['minecraft:quartz'] = 1,
+	['minecraft:lapis_lazuli'] = 1,
 	['minecraft:raw_copper'] = 1,
 	['create:raw_zinc'] = 1,
+
+	['ad_astra:raw_desh'] = 1,
+	['ad_astra:raw_ostrum'] = 1,
+	['ad_astra:raw_calorite'] = 1,
+	['ad_astra:ice_shard'] = 1,
 }
-local coalId = 'minecraft:coal'
+-- local coalId = 'minecraft:coal'
+local coalId = 'createaddition:biomass_pellet_block'
+
+if not turtleLabel:find('nether') then
+	targetOres['#minecraft:block/forge:ores/gold'] = nil
+end
 
 ---- END CONFIG ----
 
@@ -107,6 +130,7 @@ end
 
 local function equipPickaxe()
 	if selectItem(pickaxeId) then
+		print('equipped pickaxe')
 		turtle.equipLeft()
 	end
 end
@@ -361,18 +385,29 @@ local function scan()
 	for _, d in pairs(scaned) do
 		local y1 = y + d.y
 		if minLevel <= y1 and y1 < maxLevel then
-			for _, t in pairs(d.tags) do
-				t = '#'..t
-				local v = targetOres[t]
-				if v then
-					ores[#ores + 1] = {
-						x = x + d.x,
-						y = y + d.y,
-						z = z + d.z,
-						v = v,
-					}
-					break
+			local v = targetOres[d.name]
+			if not v then
+				for _, t in pairs(d.tags) do
+					if t == coalTag then
+						if turtle.getFuelLevel() * 2 < turtle.getFuelLimit() then
+							v = 1
+							break
+						end
+					end
+					t = '#'..t
+					v = targetOres[t]
+					if v then
+						break
+					end
 				end
+			end
+			if v then
+				ores[#ores + 1] = {
+					x = x + d.x,
+					y = y + d.y,
+					z = z + d.z,
+					v = v,
+				}
 			end
 		end
 	end
@@ -417,14 +452,17 @@ local function digOres(ores)
 end
 
 local function broadcastPosition()
-	while true do
-		if not peripheral.hasType('left', 'modem') then
+	local ok = false
+	repeat
+		local equipped = not peripheral.hasType('left', 'modem')
+		if equipped then
 			if not selectItem(enderWirelessModemId) then
 				return false
 			end
 			turtle.equipLeft()
 		end
-		if pcall(rednet.open, 'left') then
+		ok = pcall(rednet.open, 'left')
+		if ok then
 			local x, y, z = lps.locate()
 			rednet.broadcast({
 				name = turtleLabel,
@@ -434,11 +472,13 @@ local function broadcastPosition()
 				fuel = turtle.getFuelLevel(),
 				act = action,
 			}, 'turtle_geo_miner')
-			turtle.equipLeft()
-			return
 		end
-		sleep(0)
-	end
+		if equipped then
+			turtle.equipLeft()
+		else
+			sleep(0)
+		end
+	until ok
 end
 
 local function scanAndDig()
@@ -482,6 +522,7 @@ local function scanAndDig()
 			return true
 		elseif os.clock() > deadline then
 			print('deadline exceeded')
+			local x, y, z = lps.locate()
 			local fd = fs.open(posCacheName, 'w')
 			fd.write(textutils.serialiseJSON({x, y, z}))
 			fd.close()
@@ -490,6 +531,7 @@ local function scanAndDig()
 			print('inventory full')
 			cleanInventory()
 			if not hasFreeSlot() then
+				local x, y, z = lps.locate()
 				local fd = fs.open(posCacheName, 'w')
 				fd.write(textutils.serialiseJSON({x, y, z}))
 				fd.close()
@@ -541,6 +583,7 @@ local function doWithBroadcastPos(fn, ...)
 	parallel.waitForAny(function()
 		res = fn(table.unpack(args, 1, args.n))
 	end, function()
+		sleep(0.1)
 		while true do
 			broadcastPosition()
 			sleep(10)
@@ -551,7 +594,11 @@ end
 
 local function refuel()
 	action = 'refuel'
-	shell.run('lava_refueler')
+	if fs.exists('lava_refueler.lua') then
+		shell.run('lava_refueler')
+	else
+		shell.run('coal_refueler')
+	end
 	if turtle.getFuelLevel() * 2 < limit then
 		return false
 	end
@@ -586,6 +633,10 @@ function main(args)
 	print('min level:', minLevel)
 	print('max level:', maxLevel)
 	while true do
+		if redstone.getInput('back') then
+			print('waiting for redstone signal')
+			repeat sleep(1) until not redstone.getInput('back')
+		end
 		print('Waiting ...')
 		sleep(3)
 		do

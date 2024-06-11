@@ -1,0 +1,26 @@
+{
+	"type": "mechanical_crafter",
+	"output": "tfmg:cast_iron_distillation_controller",
+	"items": {
+		"C": {
+			"tags": ["forge:ingots/cast_iron"]
+		},
+		"P": {
+			"name": "tfmg:cast_iron_pipe",
+			"nbt": false
+		},
+		"M": {
+			"name": "tfmg:steel_mechanism",
+			"nbt": false
+		},
+		"T": {
+			"name": "create:electron_tube",
+			"nbt": false
+		}
+	},
+	"pattern": [
+		"CPC",
+		"CTC",
+		"CMC"
+	]
+}

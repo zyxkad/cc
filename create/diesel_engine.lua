@@ -6,7 +6,7 @@ local airIntakeType = 'tfmg:air_intake'
 
 local co2Id = 'tfmg:carbon_dioxide'
 
-local dieselTankId = 'fluidTank_24'
+local dieselTankId = 'fluidTank_35'
 local trashTankId = 'fluidTank_26'
 
 local engines = {}
@@ -14,13 +14,16 @@ local airTanks = {}
 
 local function update()
 	for e, _ in pairs(engines) do
-		for at, _ in pairs(airTanks) do
-			if peripheral.call(e, 'pullFluid', at) == 0 then
+		coroutine.resume(coroutine.create(peripheral.call), e, 'pullFluid', dieselTankId)
+		coroutine.resume(coroutine.create(peripheral.call), e, 'pushFluid', trashTankId, nil, co2Id)
+	end
+	for at, _ in pairs(airTanks) do
+		for e, _ in pairs(engines) do
+			local ok, amount = pcall(peripheral.call, e, 'pullFluid', at)
+			if ok and amount == 0 then
 				break
 			end
 		end
-		coroutine.resume(coroutine.create(peripheral.call), e, 'pullFluid', dieselTankId)
-		coroutine.resume(coroutine.create(peripheral.call), e, 'pushFluid', trashTankId, nil, co2Id)
 	end
 end
 

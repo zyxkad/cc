@@ -3,8 +3,7 @@
 	"output": "createaddition:alternator",
 	"items": {
 		"P": {
-			"tags": ["forge:plates/iron"],
-			"nbt": false
+			"tags": ["forge:plates/iron"]
 		},
 		"S": {
 			"name": "createaddition:copper_spool",

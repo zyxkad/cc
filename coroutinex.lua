@@ -265,7 +265,7 @@ local function awaitAny(...)
 	end
 end
 
--- wait the threads that exit first (including error)
+--- wait the threads that exit first (including error)
 local function awaitRace(...)
 	local promises = asPromises(...)
 	if #promises == 0 then
@@ -305,6 +305,8 @@ local function cancelTimerPatch(id)
 end
 
 --- the main function create a new coroutine runtime and run the given functions as main threads
+-- If all main threads exited, the runtime will not exit.
+-- However, if any main threads throws an error, the runtime will re-throw the error to outside.
 local function main(...)
 	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
 
@@ -374,7 +376,8 @@ local function main(...)
 			if type(i) == 'number' then
 				keepLoop = true
 				-- only pass internal event when asked to
-				if eventFilter[r] == nil and (not eventType or string.sub(eventType, 1, 1) ~= '#') or eventFilter[r] == eventType then
+				local filter = eventFilter[r]
+				if filter == nil and (not eventType or string.sub(eventType, 1, 1) ~= '#') or filter == eventType or filter == EMPTY_TABLE then
 					if _eventLogFile and _DEBUG_RESUME then
 						_eventLogFile.write(string.format('%.02f resuming %s\n', os.clock(), r))
 						_eventLogFile.flush()
@@ -427,6 +430,7 @@ local function main(...)
 									next = {'^'..command, r}
 								elseif command == '/yield' then
 									instantResume = true
+									eventFilter[r] = EMPTY_TABLE
 								elseif command == '/queue' then
 									queueInternalEvent(table.unpack(res, 4, res.n))
 									next = {'^'..command}

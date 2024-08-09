@@ -35,6 +35,11 @@ settings.define('coroutinex.debug.resume', {
 	default = false,
 	type = 'boolean',
 })
+settings.define('coroutinex.patch.os.timer', {
+	description = 'Replace os timer as tick counter to reduce the queue usage for timer',
+	default = true,
+	type = 'boolean',
+})
 settings.save()
 
 if settings.get('coroutinex.debug', false) then
@@ -110,10 +115,13 @@ local function isPromise(pm)
 	return type(pm) == 'table' and getmetatable(pm) == Promise
 end
 
+--- current get the current running Promise
 local function current()
 	return execute('/current')
 end
 
+--- run starts a function/thread/Promise in the current runtime.
+-- If the first argument is a function, it will be executed with the following arguments
 local function run(pm, ...)
 	if type(pm) == 'function' then
 		local fn, args = pm, table.pack(...)
@@ -130,19 +138,25 @@ local function run(pm, ...)
 	return pm
 end
 
+--- exit will stop the runtime immediately
+-- the runtime will return the arguments passed to this function
 local function exit(...)
 	execute('/exit', ...)
 end
 
--- asleep(n) is an alias of `run(sleep, n)`
+--- asleep(n) is an alias of `run(sleep, n)`
 local function asleep(n)
 	return run(sleep, n)
 end
 
+--- nextTick gives up current iteration round and resumes in the next tick.
 local function nextTick()
 	coroutine.yield('#crx_tick')
 end
 
+--- yield gives up current iteration round.
+-- All other coroutines will be executed at least once before the current coroutine resumes
+-- The runtime will not block to receive any event before resume
 local function yield()
 	coroutine.yield(nil, '/yield')
 end
@@ -179,7 +193,7 @@ local function newThreadErr(id, value)
 	return err
 end
 
--- wait all threads to return successfully
+--- wait all threads to return successfully
 local function await(...)
 	local promises = asPromises(...)
 	local rets = {}
@@ -206,7 +220,7 @@ local function await(...)
 	return table.unpack(rets, 1, count)
 end
 
--- wait the first threads to return successfully
+--- wait the first threads to return successfully
 local function awaitAny(...)
 	local promises = asPromises(...)
 	if #promises == 0 then
@@ -290,26 +304,33 @@ local function cancelTimerPatch(id)
 	execute('/canceltimer', id)
 end
 
-local os_startTimer = os.startTimer
-local os_cancelTimer = os.cancelTimer
-
-local function applyOSPatches()
-	os_startTimer = os.startTimer
-	os_cancelTimer = os.cancelTimer
-	os.startTimer = startTimerPatch
-	os.cancelTimer = cancelTimerPatch
-end
-
-local function revertOSPatches()
-	os.startTimer = os_startTimer
-	os.cancelTimer = os_cancelTimer
-end
-
+--- the main function create a new coroutine runtime and run the given functions as main threads
 local function main(...)
+	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
+
 	local RUNTIME_ID = {}
 	local routines = {}
 	local mainThreads = {}
 	local eventListeners = {}
+
+	local os_startTimer = os.startTimer
+	local os_cancelTimer = os.cancelTimer
+
+	local function applyOSPatches()
+		if optPatchOSTimer then
+			os_startTimer = os.startTimer
+			os_cancelTimer = os.cancelTimer
+			os.startTimer = startTimerPatch
+			os.cancelTimer = cancelTimerPatch
+		end
+	end
+
+	local function revertOSPatches()
+		if optPatchOSTimer then
+			os.startTimer = os_startTimer
+			os.cancelTimer = os_cancelTimer
+		end
+	end
 
 	for i, arg in ipairs({...}) do
 		if type(arg) == 'table' then

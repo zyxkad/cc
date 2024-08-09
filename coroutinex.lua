@@ -305,8 +305,8 @@ local function cancelTimerPatch(id)
 end
 
 --- the main function create a new coroutine runtime and run the given functions as main threads
--- If all main threads exited, the runtime will not exit.
 -- However, if any main threads throws an error, the runtime will re-throw the error to outside.
+-- If all main threads are exited, the runtime will not gone but wait all promises to finish.
 local function main(...)
 	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
 
@@ -377,7 +377,7 @@ local function main(...)
 				keepLoop = true
 				-- only pass internal event when asked to
 				local filter = eventFilter[r]
-				if filter == nil and (not eventType or string.sub(eventType, 1, 1) ~= '#') or filter == eventType or filter == EMPTY_TABLE then
+				if filter == nil or filter == eventType then
 					if _eventLogFile and _DEBUG_RESUME then
 						_eventLogFile.write(string.format('%.02f resuming %s\n', os.clock(), r))
 						_eventLogFile.flush()
@@ -430,7 +430,6 @@ local function main(...)
 									next = {'^'..command, r}
 								elseif command == '/yield' then
 									instantResume = true
-									eventFilter[r] = EMPTY_TABLE
 								elseif command == '/queue' then
 									queueInternalEvent(table.unpack(res, 4, res.n))
 									next = {'^'..command}
@@ -531,13 +530,17 @@ local function main(...)
 end
 
 local eventPoolTasksDone = '#crx_pool_tasks_done'
+local eventPoolDestroy = '#crx_pool_destroy'
 
+--- newThreadPool create a thread pool which ensure only limited tasks can be run at same time.
+-- The task will be start in the order of they queue into the pool
 local function newThreadPool(limit)
 	assert(type(limit) == 'number', 'Thread pool limit must be a number')
 	local count = 0
 	local running = {}
 	local waiting = {}
 	local pool = {}
+	local destoryed = false
 
 	pool.running = function() return count end
 	pool.limit = function() return limit end
@@ -565,7 +568,7 @@ local function newThreadPool(limit)
 		return table.unpack(res, 1, res.n)
 	end
 
-	-- -- release the current thread fron the pool
+	-- -- release the current thread from the pool
 	-- pool.release = function()
 	-- 	local thr = current()
 	-- 	local i = running[thr]
@@ -588,31 +591,50 @@ local function newThreadPool(limit)
 
 	pool.waitForAll = function()
 		while count > 0 do
-			coroutine.yield(eventPoolTasksDone)
+			local event, p = coroutine.yield()
+			if event == coroutine.yield() and p == poll then
+				return false
+			end
 		end
+		return true
+	end
+
+	pool.destroy = function()
+		if destoryed then
+			return {}
+		end
+		destoryed = true
+		queueInternalEvent(eventPoolDestroy, pool)
+		return waiting
 	end
 
 	run(function()
 		while true do
-			local event, pm, ok, ret = coroutine.yield(eventCoroutineDone)
-			local i = running[pm]
-			if i then
-				if not ok then
-					error(newThreadErr(-i, ret), 2)
-				end
-				if #waiting > 0 then
-					running[pm] = nil
-					local nxt = table.remove(waiting, 1)
-					running[i] = nxt
-					running[nxt] = i
-					run(nxt)
-				else
-					running[i] = nil
-					running[pm] = nil
-					count = count - 1
-					if count == 0 then
-						queueInternalEvent(eventPoolTasksDone, pool)
+			local event, pm, ok, ret = coroutine.yield()
+			if event == eventCoroutineDone then
+				local i = running[pm]
+				if i then
+					if not ok then
+						error(newThreadErr(-i, ret), 2)
 					end
+					if #waiting > 0 then
+						running[pm] = nil
+						local nxt = table.remove(waiting, 1)
+						running[i] = nxt
+						running[nxt] = i
+						run(nxt)
+					else
+						running[i] = nil
+						running[pm] = nil
+						count = count - 1
+						if count == 0 then
+							queueInternalEvent(eventPoolTasksDone, pool)
+						end
+					end
+				end
+			elseif event == eventPoolDestroy then
+				if pm == pool then
+					return
 				end
 			end
 		end
@@ -623,6 +645,7 @@ end
 
 local eventLockIdle = '#crx_lock_idle'
 
+--- newLock creates a non-reentrant read write lock
 local function newLock()
 	local lock = {}
 	local count = 0 -- 0: idle, -1: write locked, 1+: read locked

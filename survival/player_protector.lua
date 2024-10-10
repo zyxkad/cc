@@ -4,12 +4,9 @@
 local detector = assert(peripheral.find("playerDetector"))
 local chatbox = assert(peripheral.find("chatBox"))
 
-local baseName = "Claw's Base"
+local baseName = "Auto Base"
 local whitelist = {
-	'BigCrazyClaw',
 	'ckupen',
-	'laughingtrack',
-	'EnderGame98'
 }
 
 local players = {}
@@ -34,7 +31,7 @@ local function update()
 				hasStranger = true
 			end
 		end
-		sleep(0.1)
+		sleep(1)
 	end
 end
 

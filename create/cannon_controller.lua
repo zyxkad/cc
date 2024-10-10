@@ -70,7 +70,9 @@ local function rotateYaw(deg)
 	fastRotate(motorYaw, deg * yawRotateRate)
 end
 
-local function guessPitch(x, y)
+local function guessPitch(x, y, power, gravity)
+	power = power or 10
+	gravity = gravity or 31.36
 	local minDt = x / initSpeed
 	local minVy = 2 * gravity * y
 	local minRad = math.sqrt(minVy) / initSpeed
@@ -78,26 +80,13 @@ local function guessPitch(x, y)
 	return minRad / math.pi * 360
 end
 
-local function calcPitchYaw(dx, dy, dz)
+local function calcPitchYaw(dx, dy, dz, power, gravity)
 	local distance = math.sqrt(dx * dx + dz * dz)
-	local yaw = math.abs(math.atan(dz / dx) * 180 / math.pi)
+	local yaw = math.abs(math.atan2(dz, dx) * 180 / math.pi)
 	if cannonFacing ~= '+x' then
 		return false, 'Unexpected caonnon facing side '..cannonFacing
 	end
-	if dz >= 0 then
-		if dx >= 0 then -- 1
-			yaw = -yaw
-		else -- 2
-			yaw = yaw - 180
-		end
-	else -- if dz < 0
-		if dx >= 0 then -- 3
-			-- yaw = yaw
-		else -- 4
-			yaw = 180 - yaw
-		end
-	end
-	local pitch = guessPitch(distance, dy)
+	local pitch = guessPitch(distance, dy, power, gravity)
 	return true, pitch, yaw
 end
 

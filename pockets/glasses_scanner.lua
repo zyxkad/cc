@@ -146,6 +146,16 @@ local dictionary = {
 		textColor = colors.orange,
 		ch = 'G',
 	},
+	['minecraft:sponge'] = {
+		value = 8,
+		color = colors.yellow,
+		ch = 'S',
+	},
+	['minecraft:wet_sponge'] = {
+		value = 8,
+		color = colors.yellow,
+		ch = 'S',
+	},
 
 	['minecraft:dirt'] = '#minecraft:block/forge:dirt',
 	['minecraft:dirt_path'] = '#minecraft:block/forge:dirt',
@@ -177,6 +187,80 @@ if isGeoScanner then
 		MAX_RADIUS = scanner.getConfiguration().scanBlocks.maxFreeRadius
 	end
 end
+
+local canvasScale = 0.5
+local canvas = scanner.canvas and scanner.canvas()
+local canvasObjs = {}
+if canvas then
+	canvas.clear()
+	for z = -MAX_RADIUS - 1, MAX_RADIUS do
+		local row = {}
+		canvasObjs[z] = row
+		for x = -MAX_RADIUS - 1, MAX_RADIUS do
+			row[x] = {
+				rect = canvas.addRectangle(10 + (x + MAX_RADIUS + 1) * 10 * canvasScale, 10 + (z + MAX_RADIUS + 1) * 10 * canvasScale, 10 * canvasScale, 10 * canvasScale, 0),
+				text = canvas.addText({
+					x = 10 + ((x + MAX_RADIUS + 1) * 10 + 3) * canvasScale,
+					y = 10 + ((z + MAX_RADIUS + 1) * 10 + 1) * canvasScale,
+				}, '', 0, canvasScale)
+			}
+		end
+	end
+end
+local _canvas3d = scanner.canvas3d and scanner.canvas3d()
+if _canvas3d then
+	_canvas3d.clear()
+end
+local canvas3d = _canvas3d and _canvas3d.create()
+local canvas3dObjs = {}
+local canvas3dObjCaches = {}
+local canvas3dObjCaches2 = {}
+if canvas3d then
+	for z = -MAX_RADIUS - 1, MAX_RADIUS do
+		local row = {}
+		canvas3dObjs[z] = row
+		for x = -MAX_RADIUS - 1, MAX_RADIUS do
+			row[x] = {}
+		end
+	end
+end
+
+local function getOrAddObjAt(x, y, z)
+	local obj = canvas3dObjs[z][x][y]
+	if obj then
+		return obj
+	end
+	if #canvas3dObjCaches > 0 then
+		obj = canvas3dObjCaches[#canvas3dObjCaches]
+		canvas3dObjCaches[#canvas3dObjCaches] = nil
+		obj.box.setPosition(x, y, z)
+		obj.box.setSize(1, 1, 1)
+	elseif #canvas3dObjCaches2 > 0 then
+		obj = canvas3dObjCaches2[#canvas3dObjCaches2]
+		canvas3dObjCaches2[#canvas3dObjCaches2] = nil
+		obj.box.setPosition(x, y, z)
+		obj.box.setSize(1, 1, 1)
+	else
+		obj = {
+			box = canvas3d.addBox(x, y, z, 1, 1, 1, 0)
+		}
+	end
+	obj.box.setDepthTested(false)
+	canvas3dObjs[z][x][y] = obj
+	return obj
+end
+
+local function remove3dObjAt(x, y, z)
+	local obj = canvas3dObjs[z][x][y]
+	if not obj then
+		return
+	end
+	canvas3dObjs[z][x][y] = nil
+	obj.box.setAlpha(0)
+	obj.box.setSize(0, 0, 0)
+	canvas3dObjCaches[#canvas3dObjCaches + 1] = obj
+end
+
 local NIL_TABLE = {}
 
 local function scan(n)
@@ -228,63 +312,84 @@ local function scan(n)
 	return data
 end
 
-local function getMostValuable(data)
-	if data then
-		local d, d0
-		for _, b0 in pairs(data) do
-			if b0.name ~= 'minecraft:air' then
-				local b = dictionary[b0.name]
-				if type(b) == 'string' then
-					b = dictionary[b]
-				end
-				if not b then
-					if b0.name:match('_log$') then
-						b = dictionary['#minecraft:block/minecraft:logs']
-					elseif b0.name:match('coal_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/coal']
-					elseif b0.name:match('copper_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/copper']
-					elseif b0.name:match('iron_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/iron']
-					elseif b0.name:match('gold_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/gold']
-					elseif b0.name:match('redstone_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/redstone']
-					elseif b0.name:match('emerald_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/emerald']
-					elseif b0.name:match('lapis_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/lapis']
-					elseif b0.name:match('diamond_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/diamond']
-					elseif b0.name:match('quartz_ore$') then
-						b = dictionary['#minecraft:block/forge:ores/quartz']
-					elseif b0.tags then
-						for _, t in ipairs(b0.tags) do
-							b = dictionary['#'..t]
-							if b then
-								break
-							end
-						end
-						if not b then
-							for _, t in ipairs(b0.tags) do
-								b = fallbackDict['#'..t]
-								if b then
-									break
-								end
-							end
-						end
-					end
-				end
-				if not b then
-					b = NIL_TABLE
-				end
-				if not d or (d.value or 0) < (b.value or 0) or
-					 ((d.value or 0) == (b.value or 0) and math.abs(d0.y) > math.abs(b0.y)) then
-					d, d0 = b, b0
-				end
+local function parseBlock(blk)
+	if blk.name == 'minecraft:air' then
+		return NIL_TABLE
+	end
+	local b = dictionary[blk.name]
+	if type(b) == 'string' then
+		b = dictionary[b]
+	end
+	if b then
+		return b
+	end
+	if blk.name:match('_log$') then
+		b = dictionary['#minecraft:block/minecraft:logs']
+	elseif blk.name:match('coal_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/coal']
+	elseif blk.name:match('copper_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/copper']
+	elseif blk.name:match('iron_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/iron']
+	elseif blk.name:match('gold_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/gold']
+	elseif blk.name:match('redstone_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/redstone']
+	elseif blk.name:match('emerald_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/emerald']
+	elseif blk.name:match('lapis_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/lapis']
+	elseif blk.name:match('diamond_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/diamond']
+	elseif blk.name:match('quartz_ore$') then
+		b = dictionary['#minecraft:block/forge:ores/quartz']
+	elseif blk.tags then
+		for _, t in ipairs(blk.tags) do
+			b = dictionary['#'..t]
+			if b then
+				return b
 			end
 		end
-		return d, d0
+		for _, t in ipairs(blk.tags) do
+			b = fallbackDict['#'..t]
+			if b then
+				return b
+			end
+		end
+	end
+	return b or NIL_TABLE
+end
+
+local function getMostValuable(data)
+	if not data then
+		return nil
+	end
+	local d, d0
+	for _, b0 in pairs(data) do
+		if b0.name ~= 'minecraft:air' then
+			local b = parseBlock(b0)
+			if not d or (d.value or 0) < (b.value or 0) or
+				 ((d.value or 0) == (b.value or 0) and math.abs(d0.y) > math.abs(b0.y)) then
+				d, d0 = b, b0
+			end
+		end
+	end
+	return d, d0
+end
+
+local ownerIdCache = nil
+local ownerData = nil
+local function getMetaOwner()
+	if not ownerIdCache then
+		for _, e in ipairs(scanner.sense()) do
+			if e.key == 'minecraft:player' and e.x == 0 and e.y == 0 and e.z == 0 then
+				ownerIdCache = e.id
+				break
+			end
+		end
+	end
+	if ownerIdCache then
+		return scanner.getMetaByID(ownerIdCache)
 	end
 	return nil
 end
@@ -306,32 +411,71 @@ function main()
 			mapwin.setVisible(false)
 			mapwin.setBackgroundColor(colors.black)
 			mapwin.clear()
+			if canvas3d then
+				local pos = {0, 0, 0}
+				if ownerData then
+					pos[1] = -ownerData.withinBlock.x
+					pos[2] = -ownerData.withinBlock.y
+					pos[3] = -ownerData.withinBlock.z
+				end
+				canvas3d.recenter(pos[1], pos[2], pos[3])
+			end
 			for z = -MAX_RADIUS - 1, MAX_RADIUS do
 				local py = cy + z
-				if 0 < py and py <= height then
-					local l = data[z]
-					if l then
-						for x = -MAX_RADIUS - 1, MAX_RADIUS do
-							local px = cx + x
-							if 0 < px and px <= width then
-								local d, d0 = getMostValuable(l[x])
-								mapwin.setCursorPos(px, py)
-								if d then
-									mapwin.setBackgroundColor(d.color or colors.lightGray)
-									mapwin.setTextColor(d.textColor or (d.color == colors.white and colors.black or colors.white))
-									mapwin.write((x == 0 and z == 0 and 'X') or d.ch or ' ')
-								else
-									mapwin.setBackgroundColor(colors.black)
-									mapwin.setTextColor(colors.white)
-									mapwin.write((x == 0 and z == 0 and (d0 and d0.y <= 0 and 'X' or 'x')) or ' ')
-								end
+				local l = data[z]
+				for x = -MAX_RADIUS - 1, MAX_RADIUS do
+					local px = cx + x
+					local c = l and l[x]
+					for y = -MAX_RADIUS - 1, MAX_RADIUS do
+						local blk = c and c[y]
+						if blk then
+							local b = parseBlock(blk)
+							if b.value and b.value > 0 and b.color then
+								local obj = getOrAddObjAt(x, y, z)
+								obj.box.setColor(colors.packRGB(term.getPaletteColour(b.color)) * 0x100 + 0x70)
+							else
+								remove3dObjAt(x, y, z)
 							end
+						else
+							remove3dObjAt(x, y, z)
 						end
+					end
+					local d, d0 = getMostValuable(c)
+					local bgColor, textColor, ch = colors.black, colors.white, ' '
+					if d then
+						bgColor = d.color or colors.lightGray
+						textColor = d.textColor or (d.color == colors.white and colors.black or colors.white)
+						ch = (x == 0 and z == 0 and 'X') or d.ch or ' '
+					else
+						ch = (x == 0 and z == 0 and (d0 and d0.y <= 0 and 'X' or 'x')) or ' '
+					end
+					mapwin.setBackgroundColor(bgColor)
+					mapwin.setTextColor(textColor)
+					if 0 < py and py <= height and 0 < px and px <= width then
+						mapwin.setCursorPos(px, py)
+						mapwin.write(ch)
+					end
+					if canvas then
+						local obj = canvasObjs[z][x]
+						if d then
+							obj.rect.setColor(colors.packRGB(term.getPaletteColour(bgColor)) * 0x100 + 0x80)
+						else
+							obj.rect.setAlpha(0)
+						end
+						obj.text.setText(ch)
+						obj.text.setColor(colors.packRGB(term.getPaletteColour(textColor)) * 0x100 + 0xff)
 					end
 				end
 			end
 			mapwin.setVisible(true)
 			mapwin.redraw()
+			if canvas3d then
+				for _, obj in ipairs(canvas3dObjCaches2) do
+					obj.box.remove()
+				end
+				canvas3dObjCaches2 = canvas3dObjCaches
+				canvas3dObjCaches = {}
+			end
 		end
 	end
 	function whileScan()
@@ -350,6 +494,11 @@ function main()
 			else
 				sleep(0.1)
 			end
+		end
+	end
+	function whileUpdateOwner()
+		while true do
+			ownerData = getMetaOwner()
 		end
 	end
 
@@ -460,7 +609,7 @@ function main()
 		end
 	end
 
-	parallel.waitForAny(whileScan, pullEvents)
+	parallel.waitForAny(whileScan, whileUpdateOwner, pullEvents)
 end
 
 main()

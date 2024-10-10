@@ -75,6 +75,7 @@ local function craft()
 	turtle.drop()
 	sleep(1)
 	redstone.setOutput('front', false)
+	sleep(0.1)
 	-- trigger wand
 	print('Triggering wand ...')
 	redstone.setOutput('bottom', true)

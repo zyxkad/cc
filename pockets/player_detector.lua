@@ -26,8 +26,6 @@ local function showMonitor(mName)
 			printError('Cannot wrap monitor ' .. mName)
 			return
 		end
-	else
-		monitor = peripheral.find("monitor")
 	end
 	if monitor then
 		print('Showing players on monitor', peripheral.getName(monitor))
@@ -44,7 +42,7 @@ local function showMonitor(mName)
 			monitor.setCursorPos(1, i)
 			monitor.clearLine()
 			if d and d.x then
-				monitor.write(string.format('%16s | %5d %3d %5d', p, d.x, d.y, d.z))
+				monitor.write(string.format('%16s | %5d %3d %5d %s', p, d.x, d.y, d.z, d.dimension:gsub('^minecraft:', '')))
 			end
 		end
 		monitor.setCursorPos(1, #players + 1)
@@ -72,7 +70,7 @@ local function showPocket()
 			term.setCursorPos(1, i * 3 - 1)
 			term.write(string.format('  %5d %3d %5d', d.x, d.y, d.z))
 			term.setCursorPos(1, i * 3)
-			term.write('')
+			term.write(string.format('  %s', d.dimension:gsub('^minecraft:', '')))
 		end
 		sleep(0.1)
 	end

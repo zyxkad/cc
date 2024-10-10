@@ -6,13 +6,18 @@ if not iv then
 	error('No inventory manager was found')
 end
 
-local chatbox = peripheral.find('chatBox')
-if not chatbox then
-	error('No chat box was found')
-end
-
 local function startswith(s, prefix)
 	return string.find(s, prefix, 1, true) == 1
+end
+
+local function pollChatbox()
+	while true do
+		local box = peripheral.find('chatBox', function(_, chatbox) return chatbox.getOperationCooldown('chatMessage') == 0 end)
+		if box then
+			return box
+		end
+		sleep(0)
+	end
 end
 
 local function sendMessage(msg, target)
@@ -27,16 +32,11 @@ local function sendMessage(msg, target)
 	elseif type(msg) ~= 'str' then
 		error('Message must be a string or a table')
 	end
+	local chatbox = pollChatbox()
 	if target then
-		local i = 0
-		for i = 0, 101 do
-			if chatbox.sendFormattedMessageToPlayer(msg, target, msgPrompt) then
-				break
-			end
-			sleep(0.05)
-		end
+		chatbox.sendFormattedMessageToPlayer(msg, target, msgPrompt)
 	else
-		repeat sleep(0.05) until chatbox.sendFormattedMessage(msg, msgPrompt)
+		chatbox.sendFormattedMessage(msg, msgPrompt)
 	end
 end
 
@@ -74,18 +74,23 @@ function main(args)
 	while true do
 		local event, p, msg = os.pullEvent('chat')
 		if p == owner then
-			if msg == '#dump' or msg == 'dump' then
+			if msg == 'dump' then
 				local start = os.clock()
-				local ls = iv.list()
 				local total = 0
-				for _, d in ipairs(ls) do
-					local ok, amount = playerCall(owner, iv.removeItemFromPlayerNBT, invSide, d.count, d.slot)
+				for _, d in ipairs(iv.getItems()) do
+					local ok, amount = playerCall(owner, iv.removeItemFromPlayer, invSide, {fromSlot=d.slot})
+					if ok and amount then
+						total = total + amount
+					end
+				end
+				for _, d in ipairs(iv.getArmor()) do
+					local ok, amount = playerCall(owner, iv.removeItemFromPlayer, invSide, {fromSlot=39 + d.slot})
 					if ok and amount then
 						total = total + amount
 					end
 				end
 				local uset = os.clock() - start
-				chatbox.sendFormattedMessageToPlayer(textutils.serialiseJSON({
+				sendMessage({
 					text = string.format('Dumped %d items, used ', total),
 					color = 'aqua',
 					extra = {
@@ -94,23 +99,13 @@ function main(args)
 							italic = true,
 						}
 					}
-				}), owner)
-			elseif startswith(msg, '#dump ') then
+				}, owner)
+			elseif startswith(msg, 'dump ') then
 				local slot = tonumber(msg:sub(7))
 				local start = os.clock()
-				local ls = iv.list()
-				local total = 0
-				for _, d in ipairs(ls) do
-					if d.slot == slot then
-						local ok, amount = playerCall(owner, iv.removeItemFromPlayerNBT, invSide, d.count, slot)
-						if ok and amount then
-							total = amount
-						end
-						break
-					end
-				end
+				local ok, total = playerCall(owner, iv.removeItemFromPlayer, invSide, {fromSlot=slot})
 				local uset = os.clock() - start
-				chatbox.sendFormattedMessageToPlayer(textutils.serialiseJSON({
+				sendMessage({
 					text = string.format('Dumped %d items in slot %d, used ', total, slot),
 					color = 'aqua',
 					extra = {
@@ -119,23 +114,18 @@ function main(args)
 							italic = true,
 						}
 					}
-				}), owner)
-			elseif msg == '#takeall' then
+				}, owner)
+			elseif msg == 'takeall' then
 				local start = os.clock()
 				local total = 0
-				while true do
-					if not iv.isSpaceAvailable() then
-						sendErrorMsg('Send item error, no space available', owner)
-						break
+				for _, d in ipairs(iv.listChest(invSide)) do
+					local ok, amount = playerCall(owner, iv.addItemToPlayer, invSide, {fromSlot=d.slot})
+					if ok and amount then
+						total = total + amount
 					end
-					local ok, amount = playerCall(owner, iv.addItemToPlayerNBT, invSide, 64)
-					if not ok or amount == 0 then
-						break
-					end
-					total = total + amount
 				end
 				local uset = os.clock() - start
-				chatbox.sendFormattedMessageToPlayer(textutils.serialiseJSON({
+				sendMessage({
 					text = string.format('Sended %d items, used ', total),
 					color = 'aqua',
 					extra = {
@@ -144,7 +134,7 @@ function main(args)
 							italic = true,
 						}
 					}
-				}), owner)
+				}, owner)
 			end
 		end
 	end

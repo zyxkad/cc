@@ -378,7 +378,11 @@ local function scan()
 		turtle.equipLeft()
 	end
 	local scanner = peripheral.wrap('left')
-	local scaned, err = scanner.scan(scanner.getConfiguration().scanBlocks.maxFreeRadius)
+	local radius = nil
+	if peripheral.hasType(scanner, 'geoScanner') then
+		radius = scanner.getConfiguration().scanBlocks.maxFreeRadius
+	end
+	local scaned, err = scanner.scan(radius)
 	turtle.equipLeft()
 	local x, y, z = lps.locate()
 	local ores = {}
@@ -386,7 +390,7 @@ local function scan()
 		local y1 = y + d.y
 		if minLevel <= y1 and y1 < maxLevel then
 			local v = targetOres[d.name]
-			if not v then
+			if not v and d.tags then
 				for _, t in pairs(d.tags) do
 					if t == coalTag then
 						if turtle.getFuelLevel() * 2 < turtle.getFuelLimit() then

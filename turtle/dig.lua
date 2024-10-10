@@ -1,19 +1,57 @@
 -- Digger
 -- by zyxkad@gmail.com
 
-local function digAndForward()
-	while not turtle.forward() do
-		if not turtle.detect() then
-			assert(turtle.forward())
+local function recoverProg(limit)
+	local function digAndForward()
+		while not turtle.forward() do
+			if limit then
+				local ok, block = turtle.inspect()
+				if ok then
+					if not block.name:match(limit) then
+						return false
+					end
+				else
+					assert(turtle.forward())
+				end
+			end
+			turtle.dig()
 		end
-		turtle.dig()
+		return true
+	end
+
+	while true do
+		if not digAndForward() then
+			turtle.turnRight()
+		elseif not turtle.detectDown() then
+			turtle.turnRight()
+			turtle.turnRight()
+			digAndForward()
+			return true
+		end
 	end
 end
 
-function main(x, z, drop)
+function main(x, z, drop, limit)
 	x = x and tonumber(x)
 	z = z and tonumber(z) or 1
 	drop = drop == 'true'
+
+	local function digAndForward()
+		while not turtle.forward() do
+			if not turtle.detect() then
+				assert(turtle.forward())
+			end
+			if limit then
+				local ok, block = turtle.inspect()
+				if ok and not block.name:match(limit) then
+					printError('Unexpected block', block.name)
+					recoverProg(limit)
+					error('Progress recovered', 0)
+				end
+			end
+			turtle.dig()
+		end
+	end
 
 	turtle.select(1)
 	if not x then

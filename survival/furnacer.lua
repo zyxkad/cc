@@ -12,14 +12,18 @@ function main(inputName, outputName, fuelName, ...)
 	while true do
 		local minFurnaceInd = 0
 		for slot, item in pairs(inputInv.list()) do
-			for i, furnace in ipairs(furnaces) do
-				if i > minFurnaceInd then
-					local amount = inputInv.pushItems(furnace, slot, item.count, 1)
-					item.count = item.count - amount
-					if item.count <= 0 then
-						break
-					else
-						minFurnaceInd = i
+			if item.count >= 8 then
+				for i, furnace in ipairs(furnaces) do
+					if i > minFurnaceInd then
+						local amount = inputInv.pushItems(furnace, slot, 8, 1)
+						item.count = item.count - amount
+						if amount < 8 then
+							inputInv.pullItems(furnace, 1, amount)
+							minFurnaceInd = i
+						end
+						if item.count < 8 then
+							break
+						end
 					end
 				end
 			end

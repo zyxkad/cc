@@ -193,6 +193,7 @@ local canvas = scanner.canvas and scanner.canvas()
 local canvasObjs = {}
 if canvas then
 	canvas.clear()
+	debugText = canvas.addText({ x=10, y=150 }, '', 0xffffffff, 0.8)
 	for z = -MAX_RADIUS - 1, MAX_RADIUS do
 		local row = {}
 		canvasObjs[z] = row
@@ -377,22 +378,7 @@ local function getMostValuable(data)
 	return d, d0
 end
 
-local ownerIdCache = nil
 local ownerData = nil
-local function getMetaOwner()
-	if not ownerIdCache then
-		for _, e in ipairs(scanner.sense()) do
-			if e.key == 'minecraft:player' and e.x == 0 and e.y == 0 and e.z == 0 then
-				ownerIdCache = e.id
-				break
-			end
-		end
-	end
-	if ownerIdCache then
-		return scanner.getMetaByID(ownerIdCache)
-	end
-	return nil
-end
 
 function main()
 	local data, anaBlk
@@ -407,75 +393,78 @@ function main()
 		if not data then
 			return false
 		end
-		if mapwin.isVisible() then
+		local mapwinVisible = mapwin.isVisible()
+		if mapwinVisible then
 			mapwin.setVisible(false)
 			mapwin.setBackgroundColor(colors.black)
 			mapwin.clear()
-			if canvas3d then
-				local pos = {0, 0, 0}
-				if ownerData then
-					pos[1] = -ownerData.withinBlock.x
-					pos[2] = -ownerData.withinBlock.y
-					pos[3] = -ownerData.withinBlock.z
-				end
-				canvas3d.recenter(pos[1], pos[2], pos[3])
+		end
+		if canvas3d then
+			local pos = {0, 0, 0}
+			if ownerData then
+				pos[1] = -ownerData.withinBlock.x - ownerData.deltaPosX
+				pos[2] = -ownerData.withinBlock.y - ownerData.deltaPosY
+				pos[3] = -ownerData.withinBlock.z - ownerData.deltaPosZ
 			end
-			for z = -MAX_RADIUS - 1, MAX_RADIUS do
-				local py = cy + z
-				local l = data[z]
-				for x = -MAX_RADIUS - 1, MAX_RADIUS do
-					local px = cx + x
-					local c = l and l[x]
-					for y = -MAX_RADIUS - 1, MAX_RADIUS do
-						local blk = c and c[y]
-						if blk then
-							local b = parseBlock(blk)
-							if b.value and b.value > 0 and b.color then
-								local obj = getOrAddObjAt(x, y, z)
-								obj.box.setColor(colors.packRGB(term.getPaletteColour(b.color)) * 0x100 + 0x70)
-							else
-								remove3dObjAt(x, y, z)
-							end
+			canvas3d.recenter(pos[1], pos[2], pos[3])
+		end
+		for z = -MAX_RADIUS - 1, MAX_RADIUS do
+			local py = cy + z
+			local l = data[z]
+			for x = -MAX_RADIUS - 1, MAX_RADIUS do
+				local px = cx + x
+				local c = l and l[x]
+				for y = -MAX_RADIUS - 1, MAX_RADIUS do
+					local blk = c and c[y]
+					if blk then
+						local b = parseBlock(blk)
+						if b.value and b.value > 0 and b.color then
+							local obj = getOrAddObjAt(x, y, z)
+							obj.box.setColor(colors.packRGB(term.getPaletteColour(b.color)) * 0x100 + 0x10)
 						else
 							remove3dObjAt(x, y, z)
 						end
-					end
-					local d, d0 = getMostValuable(c)
-					local bgColor, textColor, ch = colors.black, colors.white, ' '
-					if d then
-						bgColor = d.color or colors.lightGray
-						textColor = d.textColor or (d.color == colors.white and colors.black or colors.white)
-						ch = (x == 0 and z == 0 and 'X') or d.ch or ' '
 					else
-						ch = (x == 0 and z == 0 and (d0 and d0.y <= 0 and 'X' or 'x')) or ' '
-					end
-					mapwin.setBackgroundColor(bgColor)
-					mapwin.setTextColor(textColor)
-					if 0 < py and py <= height and 0 < px and px <= width then
-						mapwin.setCursorPos(px, py)
-						mapwin.write(ch)
-					end
-					if canvas then
-						local obj = canvasObjs[z][x]
-						if d then
-							obj.rect.setColor(colors.packRGB(term.getPaletteColour(bgColor)) * 0x100 + 0x80)
-						else
-							obj.rect.setAlpha(0)
-						end
-						obj.text.setText(ch)
-						obj.text.setColor(colors.packRGB(term.getPaletteColour(textColor)) * 0x100 + 0xff)
+						remove3dObjAt(x, y, z)
 					end
 				end
+				local d, d0 = getMostValuable(c)
+				local bgColor, textColor, ch = colors.black, colors.white, ' '
+				if d then
+					bgColor = d.color or colors.lightGray
+					textColor = d.textColor or (d.color == colors.white and colors.black or colors.white)
+					ch = (x == 0 and z == 0 and 'X') or d.ch or ' '
+				else
+					ch = (x == 0 and z == 0 and (d0 and d0.y <= 0 and 'X' or 'x')) or ' '
+				end
+				mapwin.setBackgroundColor(bgColor)
+				mapwin.setTextColor(textColor)
+				if 0 < py and py <= height and 0 < px and px <= width then
+					mapwin.setCursorPos(px, py)
+					mapwin.write(ch)
+				end
+				if canvas then
+					local obj = canvasObjs[z][x]
+					if d then
+						obj.rect.setColor(colors.packRGB(term.getPaletteColour(bgColor)) * 0x100 + 0x80)
+					else
+						obj.rect.setAlpha(0)
+					end
+					obj.text.setText(ch)
+					obj.text.setColor(colors.packRGB(term.getPaletteColour(textColor)) * 0x100 + 0xff)
+				end
 			end
+		end
+		if mapwinVisible then
 			mapwin.setVisible(true)
 			mapwin.redraw()
-			if canvas3d then
-				for _, obj in ipairs(canvas3dObjCaches2) do
-					obj.box.remove()
-				end
-				canvas3dObjCaches2 = canvas3dObjCaches
-				canvas3dObjCaches = {}
+		end
+		if canvas3d then
+			for _, obj in ipairs(canvas3dObjCaches2) do
+				obj.box.remove()
 			end
+			canvas3dObjCaches2 = canvas3dObjCaches
+			canvas3dObjCaches = {}
 		end
 	end
 	function whileScan()
@@ -498,7 +487,7 @@ function main()
 	end
 	function whileUpdateOwner()
 		while true do
-			ownerData = getMetaOwner()
+			ownerData = scanner.getMetaOwner()
 		end
 	end
 

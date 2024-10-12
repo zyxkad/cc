@@ -66,12 +66,13 @@ local function moveUpLevel()
 	end
 end
 
-local function plantSeed()
+local function plantSeed(plantingSeed)
+	local slot = plantingSeed * 2 - 1
+	turtle.select(slot)
 	local planting = turtle.getItemDetail().name
 	if turtle.getItemCount() <= 1 then
-		local i = turtle.getSelectedSlot()
-		if i < 16 and turtle.getItemDetail(i + 1).name == planting then
-			turtle.select(i + 1)
+		if turtle.getItemDetail(slot + 1).name == planting then
+			turtle.select(slot + 1)
 		end
 		if turtle.getItemCount() <= 1 then
 			return
@@ -83,15 +84,16 @@ local function plantSeed()
 	end
 end
 
-local function plantALevel()
+local function plantALevel(plantingSeed, totalSeeds)
 	assert(turtle.turnRight())
 	while true do
 		repeat
-			plantSeed()
+			plantSeed(plantingSeed)
 		until not turtle.back()
+		plantingSeed = plantingSeed % totalSeeds + 1
 		assert(turtle.turnLeft())
 		if not turtle.forward() then
-			return
+			return plantingSeed
 		end
 		local ok, block = turtle.inspectDown()
 		if ok and block.name == 'minecraft:dirt' then
@@ -99,18 +101,19 @@ local function plantALevel()
 		end
 		assert(turtle.turnRight())
 		repeat
-			plantSeed()
+			plantSeed(plantingSeed)
 		until not turtle.forward()
+		plantingSeed = plantingSeed % totalSeeds + 1
 		local ok, block = turtle.inspect()
 		if ok and block.name == sideMark2 then
 			assert(turtle.up())
 			assert(turtle.turnLeft())
 			assert(turtle.forward())
-			return
+			return plantingSeed
 		end
 		assert(turtle.turnLeft())
 		if not turtle.forward() then
-			return
+			return plantingSeed
 		end
 		assert(turtle.turnRight())
 	end
@@ -182,13 +185,16 @@ local function waitForCropGrowup()
 end
 
 function main()
+	local LEVEL_NUM = 4
+	local totalSeeds = 4
+	local plantingSeed = 1
 	waitForCropGrowup()
 	while true do
 		returnToHome()
 		waitForCropGrowup()
 		fillSupplies()
 		assert(turtle.turnLeft())
-		for i = 1, 4 do
+		for i = 1, LEVEL_NUM do
 			moveUpLevel()
 			waitForCropGrowup()
 		end
@@ -196,9 +202,8 @@ function main()
 		returnToHome()
 		fillSupplies()
 		assert(turtle.turnLeft())
-		for i = 1, 4 do
-			turtle.select(i * 2 - 1)
-			plantALevel()
+		for i = 1, LEVEL_NUM do
+			plantingSeed = plantALevel(plantingSeed, totalSeeds)
 		end
 	end
 end

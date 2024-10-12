@@ -161,6 +161,9 @@ local dictionary = {
 	['minecraft:dirt_path'] = '#minecraft:block/forge:dirt',
 	['minecraft:grass_block'] = '#minecraft:block/forge:dirt',
 	['minecraft:ancient_debris'] = '#minecraft:block/forge:ores/netherite_scrap',
+
+	['minecraft:barrel'] = '#minecraft:block/forge:chests',
+	['minecraft:chest'] = '#minecraft:block/forge:chests',
 }
 
 local fallbackDict = {
@@ -192,8 +195,6 @@ local canvasScale = 0.5
 local canvas = scanner.canvas and scanner.canvas()
 local canvasObjs = {}
 if canvas then
-	canvas.clear()
-	debugText = canvas.addText({ x=10, y=150 }, '', 0xffffffff, 0.8)
 	for z = -MAX_RADIUS - 1, MAX_RADIUS do
 		local row = {}
 		canvasObjs[z] = row
@@ -209,9 +210,6 @@ if canvas then
 	end
 end
 local _canvas3d = scanner.canvas3d and scanner.canvas3d()
-if _canvas3d then
-	_canvas3d.clear()
-end
 local canvas3d = _canvas3d and _canvas3d.create()
 local canvas3dObjs = {}
 local canvas3dObjCaches = {}
@@ -486,8 +484,22 @@ function main()
 		end
 	end
 	function whileUpdateOwner()
+		local getMetaOwner = scanner.getMetaOwner
+		if not getMetaOwner then
+			local ownerId = nil
+			getMetaOwner = function()
+				if not ownerId then
+					for _, e in ipairs(scanner.sense()) do
+						if e.x == 0 and e.y == 0 and e.z == 0 then
+							ownerId = e.id
+						end
+					end
+				end
+				return scanner.getMetaByID(ownerId)
+			end
+		end
 		while true do
-			ownerData = scanner.getMetaOwner()
+			ownerData = getMetaOwner()
 		end
 	end
 

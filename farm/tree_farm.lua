@@ -176,15 +176,32 @@ local function recoverProg()
 	end
 end
 
+local function countDown(seconds, hint, condition)
+	hint = hint or 'waiting'
+	local _, y = term.getCursorPos()
+	for i = seconds, 1, -1 do
+		local before = os.clock()
+		if condition() then
+			print()
+			return true
+		end
+		sleep(1 - os.clock() + before)
+		term.setCursorPos(1, y)
+		term.clearLine()
+		term.write(hint .. ' ' .. i)
+	end
+	print()
+	if condition() then
+		return true
+	end
+	return false
+end
+
 function main()
 	recoverProg()
-	local maxIdel = 60 * 5
+	local maxIdel = 60 * 4
 	while true do
-		local count = 0
-		repeat
-			sleep(1)
-			count = count + 1
-		until checkIsLog() == 'log' or redstone.getInput('back') or count > maxIdel
+		countDown(maxIdel, 'Waiting tree grow up', function() return checkIsLog() == 'log' or redstone.getInput('back') end)
 		fillSupplies()
 		doIter()
 	end

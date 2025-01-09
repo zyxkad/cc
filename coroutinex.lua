@@ -306,7 +306,7 @@ end
 
 --- the main function create a new coroutine runtime and run the given functions as main threads
 -- However, if any main threads throws an error, the runtime will re-throw the error to outside.
--- If all main threads are exited, the runtime will not gone but wait all promises to finish.
+-- If all main threads are exited, the runtime will not gone but will wait all running promises to finish.
 local function main(...)
 	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
 
@@ -533,14 +533,49 @@ local eventPoolTasksDone = '#crx_pool_tasks_done'
 local eventPoolDestroy = '#crx_pool_destroy'
 
 --- newThreadPool create a thread pool which ensure only limited tasks can be run at same time.
--- The task will be start in the order of they queue into the pool
+-- The task will be start in the order of they queue into the pool.
+--
+-- It is safe to create pool outside of a coroutinex context.
+-- The internal pool manager will be run in the current context as soon as the first task is queued.
 local function newThreadPool(limit)
 	assert(type(limit) == 'number', 'Thread pool limit must be a number')
 	local count = 0
 	local running = {}
 	local waiting = {}
 	local pool = {}
-	local destoryed = false
+	local status = 0 -- 0: not start; 1: started; 2: destroyed
+
+	local function poolManager()
+		while true do
+			local event, pm, ok, ret = coroutine.yield()
+			if event == eventCoroutineDone then
+				local i = running[pm]
+				if i then
+					if not ok then
+						error(newThreadErr(-i, ret), 2)
+					end
+					if #waiting > 0 then
+						running[pm] = nil
+						local nxt = table.remove(waiting, 1)
+						running[i] = nxt
+						running[nxt] = i
+						run(nxt)
+					else
+						running[i] = nil
+						running[pm] = nil
+						count = count - 1
+						if count == 0 then
+							queueInternalEvent(eventPoolTasksDone, pool)
+						end
+					end
+				end
+			elseif event == eventPoolDestroy then
+				if pm == pool then
+					return
+				end
+			end
+		end
+	end
 
 	pool.running = function() return count end
 	pool.limit = function() return limit end
@@ -551,6 +586,12 @@ local function newThreadPool(limit)
 		end
 		local args = table.pack(...)
 		local pm = newPromise(coroutine.create(function() fn(table.unpack(args, 1, args.n)) end))
+
+		if status == 0 then
+			status = 1
+			run(poolManager)
+		end
+
 		if count < limit then
 			count = count + 1
 			local i = #running + 1
@@ -600,45 +641,15 @@ local function newThreadPool(limit)
 	end
 
 	pool.destroy = function()
-		if destoryed then
+		if status == 2 then
 			return {}
 		end
-		destoryed = true
-		queueInternalEvent(eventPoolDestroy, pool)
+		if status == 1 then
+			queueInternalEvent(eventPoolDestroy, pool)
+		end
+		status = 2
 		return waiting
 	end
-
-	run(function()
-		while true do
-			local event, pm, ok, ret = coroutine.yield()
-			if event == eventCoroutineDone then
-				local i = running[pm]
-				if i then
-					if not ok then
-						error(newThreadErr(-i, ret), 2)
-					end
-					if #waiting > 0 then
-						running[pm] = nil
-						local nxt = table.remove(waiting, 1)
-						running[i] = nxt
-						running[nxt] = i
-						run(nxt)
-					else
-						running[i] = nil
-						running[pm] = nil
-						count = count - 1
-						if count == 0 then
-							queueInternalEvent(eventPoolTasksDone, pool)
-						end
-					end
-				end
-			elseif event == eventPoolDestroy then
-				if pm == pool then
-					return
-				end
-			end
-		end
-	end)
 
 	return pool
 end

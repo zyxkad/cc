@@ -180,16 +180,37 @@ end
 
 local eventCoroutineDone = '#crx_thr_done'
 
+local _ThreadError = {}
+
+function _ThreadError.__tostring(err)
+	return string.format('Error in thread #%d:\n %s', err.index, err.err)
+end
+
 local function newThreadErr(id, value)
 	local err = {
 		index = id,
 		err = value,
 	}
-	setmetatable(err, {
-		__tostring = function(err)
-			return string.format('Error in thread #%d:\n %s', err.index, err.err)
-		end,
-	})
+	setmetatable(err, _ThreadError)
+	return err
+end
+
+local _CombinedError = {}
+
+function _CombinedError.__tostring(err)
+	local str = err.msg
+	for _, e in ipairs(err.errs) do
+		str = str .. '\n' .. tostring(e)
+	end
+	return str
+end
+
+local function newCombinedError(msg, errors)
+	local err = {
+		msg = msg,
+		errs = errors,
+	}
+	setmetatable(err, _CombinedError)
 	return err
 end
 
@@ -244,20 +265,7 @@ local function awaitAny(...)
 				errCount = errCount + 1
 				errors[i] = ret
 				if errCount == #promises then
-					local err = {
-						msg = 'All threads failed',
-						errs = errors,
-					}
-					setmetatable(err, {
-						__tostring = function(err)
-							local str = err.msg
-							for _, e in ipairs(err.errs) do
-								str = str .. '\n' .. tostring(e)
-							end
-							return str
-						end,
-					})
-					error(err, 2)
+					error(newCombinedError('All threads failed', errors), 2)
 				end
 			end
 			return i, table.unpack(ret, 1, ret.n)
@@ -713,6 +721,9 @@ local function newLock()
 end
 
 return {
+	Promise = Promise,
+	isPromise = isPromise,
+
 	current = current,
 	run = run,
 	exit = exit,

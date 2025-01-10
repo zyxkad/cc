@@ -40,6 +40,11 @@ settings.define('coroutinex.patch.os.timer', {
 	default = true,
 	type = 'boolean',
 })
+settings.define('coroutinex.patch.os.timer.tps', {
+	description = 'Timer resolution',
+	default = 20,
+	type = 'number',
+})
 settings.save()
 
 if settings.get('coroutinex.debug', false) then
@@ -138,7 +143,7 @@ local function run(pm, ...)
 	return pm
 end
 
---- exit will stop the runtime immediately
+--- exit will interrupt the runtime immediately
 -- the runtime will return the arguments passed to this function
 local function exit(...)
 	execute('/exit', ...)
@@ -156,7 +161,7 @@ end
 
 --- yield gives up current iteration round.
 -- All other coroutines will be executed at least once before the current coroutine resumes
--- The runtime will not block to receive any event before resume
+-- The runtime will not yield for receive any event before resume
 local function yield()
 	coroutine.yield(nil, '/yield')
 end
@@ -312,13 +317,15 @@ local function cancelTimerPatch(id)
 	execute('/canceltimer', id)
 end
 
---- the main function create a new coroutine runtime and run the given functions as main threads
--- However, if any main threads throws an error, the runtime will re-throw the error to outside.
--- If all main threads are exited, the runtime will not gone but will wait all running promises to finish.
+--- main create a new coroutine runtime and run the given functions as main threads
+-- If any main threads throws an error, the runtime will re-throw the error to outside.
+-- If all main threads are exited, the runtime will not quit but will wait for all running promises to finish.
+-- Changing any settings at runtime will have no effect
 local function main(...)
 	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
+	local timerTps = settings.get('coroutinex.patch.os.timer.tps', 20)
 
-	local RUNTIME_ID = {}
+	local RUNTIME_DATA = {}
 	local routines = {}
 	local mainThreads = {}
 	local eventListeners = {}
@@ -371,9 +378,49 @@ local function main(...)
 	local internalEvents = {}
 	local eventFilter = {}
 	local eventData = {}
-	local queueInternalEvent = function(event, ...)
+	local function run(pm)
+		pm._runon = RUNTIME_DATA
+		local j = #routines + 1
+		routines[j] = pm
+		routines[pm] = j
+	end
+	local function queueInternalEvent(event, ...)
 		internalEvents[#internalEvents + 1] = {event, ...}
 	end
+
+	RUNTIME_DATA.activePools = {}
+
+	local function coroutineDoneHook_Pool(pm, ok, ret)
+		local pool = RUNTIME_DATA.activePools[pm]
+		if not pool then
+			return
+		end
+		RUNTIME_DATA.activePools[pm] = nil
+		if pool._destroyed then
+			return
+		end
+		local running = pool._running
+		local waiting = pool._waiting
+		local i = running[pm]
+		if not i then
+			return
+		end
+		if #waiting > 0 then
+			running[pm] = nil
+			local nxt = table.remove(waiting, 1)
+			running[i] = nxt
+			running[nxt] = i
+			run(nxt)
+		else
+			running[i] = nil
+			running[pm] = nil
+			pool._count = pool._count - 1
+			if pool._count == 0 then
+				queueInternalEvent(eventPoolEmpty, pool)
+			end
+		end
+	end
+
 	while true do
 		local instantResume = false
 		local keepLoop = false
@@ -411,6 +458,7 @@ local function main(...)
 								_eventLogFile.flush()
 							end
 							queueInternalEvent(eventCoroutineDone, r, false, data)
+							coroutineDoneHook_Pool(r, false, data)
 						else
 							local isDead = coroutine.status(rn) == 'dead'
 							if isDead then
@@ -424,6 +472,7 @@ local function main(...)
 									_eventLogFile.flush()
 								end
 								queueInternalEvent(eventCoroutineDone, r, true, ret)
+								coroutineDoneHook_Pool(r, true, ret)
 							elseif type(data) == 'string' then
 								if data == '#crx_tick' then
 									waitingTick = true
@@ -443,7 +492,7 @@ local function main(...)
 									next = {'^'..command}
 								elseif command == '/timer' then
 									local time = res[4]
-									timers[timerSID] = os.clock() + math.floor(time * 20 + 0.5) / 20
+									timers[timerSID] = os.clock() + math.floor(time * timerTps + 0.5) / timerTps
 									next = {'^'..command, timerSID}
 									timerSID = timerSID + 1
 								elseif command == '/canceltimer' then
@@ -454,14 +503,11 @@ local function main(...)
 									local pm = res[4]
 									next = {'^'..command}
 									if pm._runon then
-										if pm._runon ~= RUNTIME_ID then
+										if pm._runon ~= RUNTIME_DATA then
 											next = {'^'..command, string.format('%s: Promise %s is already running on a different runtime', tostring(rn), tostring(pm))}
 										end
 									else
-										pm._runon = RUNTIME_ID
-										local j = #routines + 1
-										routines[j] = pm
-										routines[pm] = j
+										run(pm)
 										instantResume = true
 									end
 								elseif command == '/stop' then -- TODO: is this really needed and safe?
@@ -537,7 +583,7 @@ local function main(...)
 	end
 end
 
-local eventPoolTasksDone = '#crx_pool_tasks_done'
+local eventPoolEmpty = '#crx_pool_empty'
 local eventPoolDestroy = '#crx_pool_destroy'
 
 --- newThreadPool create a thread pool which ensure only limited tasks can be run at same time.
@@ -545,48 +591,21 @@ local eventPoolDestroy = '#crx_pool_destroy'
 --
 -- It is safe to create pool outside of a coroutinex context.
 -- The internal pool manager will be run in the current context as soon as the first task is queued.
+-- User should call destroy after the pool is no longer used to release resources.
 local function newThreadPool(limit)
 	assert(type(limit) == 'number', 'Thread pool limit must be a number')
-	local count = 0
 	local running = {}
 	local waiting = {}
-	local pool = {}
-	local status = 0 -- 0: not start; 1: started; 2: destroyed
+	local pool = {
+		_count = 0,
+		_running = running,
+		_waiting = waiting,
+		_destroyed = false,
+	}
 
-	local function poolManager()
-		while true do
-			local event, pm, ok, ret = coroutine.yield()
-			if event == eventCoroutineDone then
-				local i = running[pm]
-				if i then
-					if not ok then
-						error(newThreadErr(-i, ret), 2)
-					end
-					if #waiting > 0 then
-						running[pm] = nil
-						local nxt = table.remove(waiting, 1)
-						running[i] = nxt
-						running[nxt] = i
-						run(nxt)
-					else
-						running[i] = nil
-						running[pm] = nil
-						count = count - 1
-						if count == 0 then
-							queueInternalEvent(eventPoolTasksDone, pool)
-						end
-					end
-				end
-			elseif event == eventPoolDestroy then
-				if pm == pool then
-					return
-				end
-			end
-		end
-	end
-
-	pool.running = function() return count end
+	pool.running = function() return pool._count end
 	pool.limit = function() return limit end
+	pool.isDestroyed = function() return pool._destroyed end
 
 	pool.queue = function(fn, ...)
 		if type(fn) ~= 'function' then
@@ -595,16 +614,12 @@ local function newThreadPool(limit)
 		local args = table.pack(...)
 		local pm = newPromise(coroutine.create(function() fn(table.unpack(args, 1, args.n)) end))
 
-		if status == 0 then
-			status = 1
-			run(poolManager)
-		end
-
-		if count < limit then
-			count = count + 1
+		if pool._count < limit then
+			pool._count = pool._count + 1
 			local i = #running + 1
 			running[i] = pm
 			running[pm] = i
+			current()._runon.activePools[pm] = pool
 			run(pm)
 		else
 			waiting[#waiting + 1] = pm
@@ -639,9 +654,9 @@ local function newThreadPool(limit)
 	-- end
 
 	pool.waitForAll = function()
-		while count > 0 do
-			local event, p = coroutine.yield()
-			if event == coroutine.yield() and p == poll then
+		while pool._count > 0 do
+			local event, p = coroutine.yield() -- for both eventPoolEmpty and eventPoolDestroy
+			if event == eventPoolDestroy and p == poll then
 				return false
 			end
 		end
@@ -649,13 +664,11 @@ local function newThreadPool(limit)
 	end
 
 	pool.destroy = function()
-		if status == 2 then
+		if pool._destroyed then
 			return {}
 		end
-		if status == 1 then
-			queueInternalEvent(eventPoolDestroy, pool)
-		end
-		status = 2
+		pool._destroyed = true
+		queueInternalEvent(eventPoolDestroy, pool)
 		return waiting
 	end
 

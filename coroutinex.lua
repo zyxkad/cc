@@ -2,7 +2,7 @@
 -- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
-local VERSION = '1.0.3'
+local VERSION = '1.1.0'
 
 ---- BEGIN debug ----
 
@@ -45,6 +45,11 @@ settings.define('coroutinex.patch.os.timer', {
 settings.define('coroutinex.patch.os.timer.tps', {
 	description = 'Timer resolution',
 	default = 20,
+	type = 'number',
+})
+settings.define('coroutinex.yield.max_interval', {
+	description = 'The max milliseconds can runtime keep running without yielding',
+	default = 1000,
 	type = 'number',
 })
 settings.save()
@@ -165,7 +170,7 @@ end
 
 --- yield gives up current iteration round.
 -- All other coroutines will be executed at least once before the current coroutine resumes
--- The runtime will not yield during the process
+-- The runtime may or may not yield depends on coroutinex.yield.max_interval setting
 local function yield()
 	coroutine.yield(nil, '/yield')
 end
@@ -340,6 +345,7 @@ local function main(...)
 	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
 	local timerTps = settings.get('coroutinex.patch.os.timer.tps', 20)
 	local timerSpt = 1 / timerTps
+	local maxYieldInterval = settings.get('coroutinex.yield.max_interval')
 
 	local RUNTIME_DATA = {}
 	local routines = {}
@@ -457,13 +463,17 @@ local function main(...)
 		coroutineDoneHook_Pool(r, ok, data)
 	end
 
+	local lastYield = os.epoch('utc')
+	local needForceYield = false
+
 	while true do
+		local finishedIds = {}
 		local instantResume = false
 		local keepLoop = false
 		local eventType = eventData[1]
+		needForceYield = false
 
 		applyOSPatches()
-		local finishedIds = {}
 		while true do
 			newRountine = false
 			for i, r in pairs(routineIds) do
@@ -471,8 +481,9 @@ local function main(...)
 					keepLoop = true
 					finishedIds[i] = true
 					local filter = eventFilter[r]
-					local filterOk = filter == nil or filter == eventType
-					if filterOk then
+					local allowAny = filter == EMPTY_TABLE
+					local filterOk = allowAny or filter == nil or filter == eventType
+					if not allowAny and filterOk then
 						if optPatchOSTimer and eventType == 'timer' then
 							local timerId = eventData[2]
 							if r._timers[timerId] then
@@ -542,6 +553,7 @@ local function main(...)
 									elseif command == '/current' then
 										next = {'^'..command, r}
 									elseif command == '/yield' then
+										eventFilter[r] = EMPTY_TABLE
 										instantResume = true
 									elseif command == '/queue' then
 										queueInternalEvent(table.unpack(res, 4, res.n))
@@ -570,7 +582,6 @@ local function main(...)
 											end
 										else
 											run(pm)
-											instantResume = true
 										end
 									elseif command == '/stop' then
 										local pm = res[4]
@@ -599,7 +610,11 @@ local function main(...)
 					end
 				end
 			end
-			if not newRountine then
+			if not newRountine and not instantResume then
+				break
+			end
+			needForceYield = os.epoch('utc') - lastYield > maxYieldInterval
+			if needForceYield then
 				break
 			end
 			if instantResume then
@@ -614,19 +629,14 @@ local function main(...)
 			return
 		end
 
-		if #internalEvents > 0 then
+		if not needForceYield and #internalEvents > 0 then
 			eventData = table.remove(internalEvents, 1)
-		elseif instantResume then
-			eventData = EMPTY_TABLE
 		else
-			if _eventLogFile and _DEBUG_RESUME then
-				_eventLogFile.write(string.format('%.02f %s\n', os.clock(), 'polling event'))
-				_eventLogFile.flush()
-			end
 			local flag
 			repeat
 				flag = true
 				eventData = table.pack(coroutine.yield())
+				lastYield = os.epoch('utc')
 				if optPatchOSTimer and eventData[1] == 'timer' and eventData[2] == tickTimerId then
 					tickTimerId = os.startTimer(0)
 					local now = os.clock()
@@ -638,7 +648,6 @@ local function main(...)
 						end
 					end
 					if waitingTick then
-						waitingTick = false
 						eventData = {'#crx_tick'}
 					elseif #internalEvents > 0 then
 						eventData = table.remove(internalEvents, 1)
@@ -664,10 +673,9 @@ local function main(...)
 						end
 					end
 				end
-			until flag
-			if _eventLogFile and _DEBUG_RESUME then
-				_eventLogFile.write(string.format('%.02f %s\n', os.clock(), 'found valid event'))
-				_eventLogFile.flush()
+			until needForceYield or flag
+			if needForceYield and not flag then
+				eventData = EMPTY_TABLE
 			end
 			if eventData[1] == 'terminate' then
 				terminateAll(table.unpack(eventData, 2, eventData.n))

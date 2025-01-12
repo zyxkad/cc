@@ -2,7 +2,7 @@
 -- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
-local VERSION = '1.0.1'
+local VERSION = '1.0.2'
 
 ---- BEGIN debug ----
 
@@ -390,7 +390,7 @@ local function main(...)
 		-- [os.clock()] = id,
 	}
 	local timerSID = 1
-	local tickTimerId = os.startTimer(0)
+	local tickTimerId = optPatchOSTimer and os.startTimer(0) or 0
 	local internalEvents = {}
 	local eventFilter = {}
 	local eventData = {}
@@ -462,7 +462,7 @@ local function main(...)
 			keepLoop = true
 			local filter = eventFilter[r]
 			local filterOk = filter == nil or filter == eventType
-			if filterOk and eventType == 'timer' then
+			if filterOk and optPatchOSTimer and eventType == 'timer' then
 				local timerId = eventData[2]
 				if r._timers[timerId] then
 					r._timers[timerId] = nil
@@ -598,7 +598,7 @@ local function main(...)
 			repeat
 				flag = true
 				eventData = table.pack(coroutine.yield())
-				if eventData[1] == 'timer' and eventData[2] == tickTimerId then
+				if optPatchOSTimer and eventData[1] == 'timer' and eventData[2] == tickTimerId then
 					tickTimerId = os.startTimer(0)
 					local now = os.clock()
 					for exp, id in pairs(timers) do

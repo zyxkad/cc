@@ -2,7 +2,7 @@
 -- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
-local VERSION = '1.0.2'
+local VERSION = '1.0.3'
 
 ---- BEGIN debug ----
 
@@ -63,7 +63,8 @@ local function execute(command, ...)
 	assert(type(command) == 'string')
 	local res = table.pack(coroutine.yield(nil, command, ...))
 	if res[1] ~= ('^' .. command) then
-		error('Tring to execute command ' .. command .. ' outside coroutinex threads', 3)
+		error('Tring to execute command ' .. command .. ' outside coroutinex threads\n' ..
+			'This is likely some internal problem happens inside coroutinex, please restart your computer', 2)
 	end
 	return table.unpack(res, 2, res.n)
 end
@@ -390,26 +391,30 @@ local function main(...)
 		-- [os.clock()] = id,
 	}
 	local timerSID = 1
-	local tickTimerId = optPatchOSTimer and os.startTimer(0) or 0
+	local tickTimerId = optPatchOSTimer and os.startTimer(0) or -1
 	local internalEvents = {}
 	local eventFilter = {}
 	local eventData = {}
+	local newRountine = false
 	local function run(pm)
 		pm._runon = RUNTIME_DATA
 		local j = #routineIds + 1
 		routineIds[j] = pm
 		routines[pm] = j
+		newRountine = true
+		if _eventLogFile and _DEBUG_RESUME then
+			_eventLogFile.write(string.format('%.02f created  %s\n', os.clock(), pm))
+			_eventLogFile.flush()
+		end
 	end
 	local function queueInternalEvent(event, ...)
 		internalEvents[#internalEvents + 1] = {event, ...}
 	end
 
 	local function terminateAll(...)
-		for i, r in pairs(routines) do
-			if type(i) == 'number' then
-				if coroutine.status(r.native) ~= 'dead' then
-					coroutine.resume(r.native, 'terminate', ...)
-				end
+		for i, r in pairs(routineIds) do
+			if coroutine.status(r.native) ~= 'dead' then
+				coroutine.resume(r.native, 'terminate', ...)
 			end
 		end
 	end
@@ -458,130 +463,150 @@ local function main(...)
 		local eventType = eventData[1]
 
 		applyOSPatches()
-		for i, r in pairs(routineIds) do
-			keepLoop = true
-			local filter = eventFilter[r]
-			local filterOk = filter == nil or filter == eventType
-			if filterOk and optPatchOSTimer and eventType == 'timer' then
-				local timerId = eventData[2]
-				if r._timers[timerId] then
-					r._timers[timerId] = nil
-				else
-					filterOk = false
-				end
-			end
-			if filterOk and eventType:sub(1, 1) == '#' then
-				filterOk = filter == '#' or filter == eventType
-			end
-			if filterOk then
-				eventFilter[r] = nil
-				if _eventLogFile and _DEBUG_RESUME then
-					_eventLogFile.write(string.format('%.02f resuming %s\n', os.clock(), r))
-					_eventLogFile.flush()
-				end
-				local next = eventData
-				repeat
-					local rn = r.native
-					local res = table.pack(coroutine.resume(rn, table.unpack(next, 1, next.n)))
-					next = false
-					local ok, data = res[1], res[2]
-					if not ok then -- error occurred
-						if mainThreads[r] then
-							revertOSPatches()
-							terminateAll('thread error')
-							error(newThreadErr(nil, r, data), 2)
-						end
-						routineIds[i] = nil
-						routines[r] = nil
-						r._status = Promise.REJECTED
-						r._result = data
-						if _eventLogFile then
-							_eventLogFile.write(string.format('%.02f error %s\n  %s\n', os.clock(), r, tostring(data)))
-							_eventLogFile.flush()
-						end
-						queueCoroutineDoneEvent(r, false, data)
-					else
-						local isDead = coroutine.status(rn) == 'dead'
-						if isDead then
-							routineIds[i] = nil
-							routines[r] = nil
-							r._status = Promise.FULFILLED
-							local ret = table.pack(table.unpack(res, 2, res.n))
-							r._result = ret
-							if _eventLogFile and _DEBUG_RESUME then
-								_eventLogFile.write(string.format('%.02f done %s %s\n', os.clock(), r, textutils.serialize(ret, { compact = true, allow_repetitions = true })))
-								_eventLogFile.flush()
+		local finishedIds = {}
+		while true do
+			newRountine = false
+			for i, r in pairs(routineIds) do
+				if not finishedIds[i] then
+					keepLoop = true
+					finishedIds[i] = true
+					local filter = eventFilter[r]
+					local filterOk = filter == nil or filter == eventType
+					if filterOk then
+						if optPatchOSTimer and eventType == 'timer' then
+							local timerId = eventData[2]
+							if r._timers[timerId] then
+								r._timers[timerId] = nil
+							else
+								filterOk = false
 							end
-							queueCoroutineDoneEvent(r, true, ret)
-						elseif type(data) == 'string' then
-							if data == '#crx_tick' then
-								waitingTick = true
-							end
-							eventFilter[r] = data
-						elseif data == nil and type(res[3]) == 'string' then
-							local command = res[3]
-							if command == '/exit' then
-								revertOSPatches()
-								terminateAll('/exit')
-								return table.unpack(res, 4)
-							elseif command == '/current' then
-								next = {'^'..command, r}
-							elseif command == '/yield' then
-								instantResume = true
-							elseif command == '/queue' then
-								queueInternalEvent(table.unpack(res, 4, res.n))
-								next = {'^'..command}
-							elseif command == '/timer' then
-								local time = res[4]
-								local exp = os.clock() + math.floor(time * timerTps + timerSpt) * timerSpt
-								local id = timers[exp]
-								if not id then
-									id = timerSID
-									timerSID = timerSID + 1
-									timers[exp] = id
-								end
-								r._timers[id] = true
-								next = {'^'..command, id}
-							elseif command == '/canceltimer' then -- cannot cancel a timer currently
-								local timerId = res[4]
-								-- timers[timerId] = nil
-								next = {'^'..command}
-							elseif command == '/run' then
-								local pm = res[4]
-								next = {'^'..command}
-								if pm._runon then
-									if pm._runon ~= RUNTIME_DATA then
-										next = {'^'..command, string.format('%s: Promise %s is already running on a different runtime', tostring(rn), tostring(pm))}
-									end
-								else
-									run(pm)
-									instantResume = true
-								end
-							elseif command == '/stop' then
-								local pm = res[4]
-								if pm._runon ~= RUNTIME_DATA then
-									next = {'^'..command, 'Tring to terminate a promise that does not belong to current runtime'}
-								end
-								local j = routines[pm]
-								if j then
-									local ok, data = coroutine.resume(pm.native, 'terminate', '/stop', r)
-									if not ok or not data then
-										routineIds[j] = nil
-										routines[pm] = nil
-										pm._status = Promise.REJECTED
-										pm._result = data
-										if _eventLogFile then
-											_eventLogFile.write(string.format('%.02f terminated %s\n', os.clock(), pm))
-											_eventLogFile.flush()
-										end
-										queueCoroutineDoneEvent(r, false, data)
-									end
-								end
-							end
+						elseif type(eventType) == 'string' and eventType:sub(1, 1) == '#' then
+							filterOk = filter == '#' or filter == eventType
 						end
 					end
-				until not next
+					if filterOk then
+						eventFilter[r] = nil
+						local next = eventData
+						repeat
+							if _eventLogFile and _DEBUG_RESUME then
+								_eventLogFile.write(string.format('%.02f resuming %s %s\n', os.clock(), r, next[1]))
+								_eventLogFile.flush()
+							end
+							local rn = r.native
+							local res = table.pack(coroutine.resume(rn, table.unpack(next, 1, next.n)))
+							next = false
+							local ok, data = res[1], res[2]
+							if not ok then -- when error occurred
+								if mainThreads[r] then
+									revertOSPatches()
+									terminateAll('thread error')
+									error(newThreadErr(nil, r, data), 2)
+								end
+								routineIds[i] = nil
+								routines[r] = nil
+								r._status = Promise.REJECTED
+								r._result = data
+								if _eventLogFile then
+									_eventLogFile.write(string.format('%.02f error    %s\n  %s\n', os.clock(), r, tostring(data)))
+									_eventLogFile.flush()
+								end
+								queueCoroutineDoneEvent(r, false, data)
+							else
+								if _eventLogFile and _DEBUG_RESUME then
+									_eventLogFile.write(string.format('%.02f yield    %s %s %s\n', os.clock(), r, data, res[3]))
+									_eventLogFile.flush()
+								end
+								local isDead = coroutine.status(rn) == 'dead'
+								if isDead then
+									routineIds[i] = nil
+									routines[r] = nil
+									r._status = Promise.FULFILLED
+									local ret = table.pack(table.unpack(res, 2, res.n))
+									r._result = ret
+									if _eventLogFile and _DEBUG_RESUME then
+										_eventLogFile.write(string.format('%.02f done     %s %s\n', os.clock(), r, textutils.serialize(ret, { compact = true, allow_repetitions = true })))
+										_eventLogFile.flush()
+									end
+									queueCoroutineDoneEvent(r, true, ret)
+								elseif type(data) == 'string' then
+									if data == '#crx_tick' then
+										waitingTick = true
+									end
+									eventFilter[r] = data
+								elseif data == nil and type(res[3]) == 'string' then
+									local command = res[3]
+									if command == '/exit' then
+										revertOSPatches()
+										terminateAll('/exit')
+										return table.unpack(res, 4)
+									elseif command == '/current' then
+										next = {'^'..command, r}
+									elseif command == '/yield' then
+										instantResume = true
+									elseif command == '/queue' then
+										queueInternalEvent(table.unpack(res, 4, res.n))
+										next = {'^'..command}
+									elseif command == '/timer' then
+										local time = res[4]
+										local exp = os.clock() + math.floor(time * timerTps + timerSpt) * timerSpt
+										local id = timers[exp]
+										if not id then
+											id = timerSID
+											timerSID = timerSID + 1
+											timers[exp] = id
+										end
+										r._timers[id] = true
+										next = {'^'..command, id}
+									elseif command == '/canceltimer' then -- cannot cancel a timer currently
+										local timerId = res[4]
+										-- timers[timerId] = nil
+										next = {'^'..command}
+									elseif command == '/run' then
+										local pm = res[4]
+										next = {'^'..command}
+										if pm._runon then
+											if pm._runon ~= RUNTIME_DATA then
+												next = {'^'..command, string.format('%s: Promise %s is already running on a different runtime', tostring(rn), tostring(pm))}
+											end
+										else
+											run(pm)
+											instantResume = true
+										end
+									elseif command == '/stop' then
+										local pm = res[4]
+										if pm._runon ~= RUNTIME_DATA then
+											next = {'^'..command, 'Tring to terminate a promise that does not belong to current runtime'}
+										end
+										local j = routines[pm]
+										if j then
+											local ok, data = coroutine.resume(pm.native, 'terminate', '/stop', r)
+											if not ok or not data then
+												routineIds[j] = nil
+												routines[pm] = nil
+												pm._status = Promise.REJECTED
+												pm._result = data
+												if _eventLogFile then
+													_eventLogFile.write(string.format('%.02f terminated %s\n', os.clock(), pm))
+													_eventLogFile.flush()
+												end
+												queueCoroutineDoneEvent(r, false, data)
+											end
+										end
+									end
+								end
+							end
+						until not next
+					end
+				end
 			end
+			if not newRountine then
+				break
+			end
+			if instantResume then
+				finishedIds = {}
+			end
+			eventType = nil
+			eventData = EMPTY_TABLE
 		end
 		revertOSPatches()
 
@@ -594,6 +619,10 @@ local function main(...)
 		elseif instantResume then
 			eventData = EMPTY_TABLE
 		else
+			if _eventLogFile and _DEBUG_RESUME then
+				_eventLogFile.write(string.format('%.02f %s\n', os.clock(), 'polling event'))
+				_eventLogFile.flush()
+			end
 			local flag
 			repeat
 				flag = true
@@ -601,6 +630,7 @@ local function main(...)
 				if optPatchOSTimer and eventData[1] == 'timer' and eventData[2] == tickTimerId then
 					tickTimerId = os.startTimer(0)
 					local now = os.clock()
+					-- TODO: use sorted list here
 					for exp, id in pairs(timers) do
 						if exp < now + timerSpt then
 							timers[exp] = nil
@@ -635,6 +665,10 @@ local function main(...)
 					end
 				end
 			until flag
+			if _eventLogFile and _DEBUG_RESUME then
+				_eventLogFile.write(string.format('%.02f %s\n', os.clock(), 'found valid event'))
+				_eventLogFile.flush()
+			end
 			if eventData[1] == 'terminate' then
 				terminateAll(table.unpack(eventData, 2, eventData.n))
 				error('Terminated', 0)

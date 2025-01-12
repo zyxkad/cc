@@ -7,7 +7,7 @@ Some scripts also require [Advanced Peripherals](https://github.com/SirEndii/Adv
 ## LICENSE
 
 You have to follow the [GPL-3.0 LICENSE](./LICENSE),
-which means **you can use them anywhere but you have to keep the original author(s)**.
+which means **you can use them anywhere but you have to keep the original author(s) and source**.
 
 > Note: Some script is copy and improve or translate from other langruage. If that violated your rights, please let me know and I will delete it
 

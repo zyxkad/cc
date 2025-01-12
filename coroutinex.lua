@@ -2,7 +2,7 @@
 -- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
-local VERSION = '1.0.0'
+local VERSION = '1.0.1'
 
 ---- BEGIN debug ----
 
@@ -461,15 +461,19 @@ local function main(...)
 		for i, r in pairs(routineIds) do
 			keepLoop = true
 			local filter = eventFilter[r]
-			if eventType == 'timer' then
+			local filterOk = filter == nil or filter == eventType
+			if filterOk and eventType == 'timer' then
 				local timerId = eventData[2]
 				if r._timers[timerId] then
 					r._timers[timerId] = nil
 				else
-					filter = EMPTY_TABLE
+					filterOk = false
 				end
 			end
-			if filter ~= EMPTY_TABLE and (filter == nil or filter == eventType) then
+			if filterOk and eventType:sub(1, 1) == '#' then
+				filterOk = filter == '#' or filter == eventType
+			end
+			if filterOk then
 				eventFilter[r] = nil
 				if _eventLogFile and _DEBUG_RESUME then
 					_eventLogFile.write(string.format('%.02f resuming %s\n', os.clock(), r))
@@ -711,7 +715,7 @@ local function newThreadPool(limit)
 
 	pool.waitForAll = function()
 		while pool._count > 0 do
-			local event, p = coroutine.yield() -- for both eventPoolEmpty and eventPoolDestroy
+			local event, p = coroutine.yield('#') -- for both eventPoolEmpty and eventPoolDestroy
 			if event == eventPoolDestroy and p == poll then
 				return false
 			end

@@ -2,7 +2,7 @@
 -- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
-local VERSION = '1.1.0'
+local VERSION = '1.2.0'
 
 ---- BEGIN debug ----
 
@@ -342,10 +342,12 @@ end
 -- If all main threads are exited, the runtime will not quit but will wait for all running promises to finish.
 -- Changing any settings at runtime will have no effect
 --
--- main function can be provided with a set of filter table { event: string, callback: function }
--- These filters' callbacks will be executed with event datas when an event is pulled from upper coroutine.
--- The callback should NEVER yield, it should simply provides `false` to indicate if the event should be dropped,
--- any other value (such as true or nil) will keep the event pass down.
+-- main function can be provided with a set of event processor:
+--   { event: string, callback: function(event, arg1, arg2, ...): nil | false | (true, newEvent, a1, a2, ...) }
+-- These processors' callbacks will be invoked with event datas as a list when an event is pulled from upper coroutine.
+-- The callback should NEVER yield, it should only do checks and conversions.
+-- It can returns `false` to indicate that the event should be dropped, or `true` to replace current event with the extra return values
+-- `nil` will keep the original event pass down, any other values have undefined behaviour.
 local function main(...)
 	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
 	local timerTps = settings.get('coroutinex.patch.os.timer.tps', 20)
@@ -671,9 +673,12 @@ local function main(...)
 					local l = eventListeners[eventData[1]]
 					if l then
 						for _, d in pairs(l) do
-							if d.callback(table.unpack(eventData, 1, eventData.n)) == false then
+							local rets = table.pack(d.callback(table.unpack(eventData, 1, eventData.n)))
+							if rets[1] == false then
 								flag = false
 								break
+							elseif rets[1] == true then
+								eventData = table.pack(table.unpack(rets, 2, rets.n))
 							end
 						end
 					end

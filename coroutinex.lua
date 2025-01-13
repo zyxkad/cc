@@ -344,7 +344,7 @@ end
 --
 -- main function can be provided with a set of event processor:
 --   { event: string, callback: function(event, arg1, arg2, ...): nil | false | (true, newEvent, a1, a2, ...) }
--- These processors' callbacks will be invoked with event datas as a list when an event is pulled from upper coroutine.
+-- These processors' callbacks will be invoked with event data when one is pulled from parent coroutine.
 -- The callback should NEVER yield, it should only do checks and conversions.
 -- It can returns `false` to indicate that the event should be dropped, or `true` to replace current event with the extra return values
 -- `nil` will keep the original event pass down, any other values have undefined behaviour.

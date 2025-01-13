@@ -341,6 +341,11 @@ end
 -- If any main threads throws an error, the runtime will re-throw the error to outside.
 -- If all main threads are exited, the runtime will not quit but will wait for all running promises to finish.
 -- Changing any settings at runtime will have no effect
+--
+-- main function can be provided with a set of filter table { event: string, callback: function }
+-- These filters' callbacks will be executed with event datas when an event is pulled from upper coroutine.
+-- The callback should NEVER yield, it should simply provides `false` to indicate if the event should be dropped,
+-- any other value (such as true or nil) will keep the event pass down.
 local function main(...)
 	local optPatchOSTimer = settings.get('coroutinex.patch.os.timer', true)
 	local timerTps = settings.get('coroutinex.patch.os.timer.tps', 20)

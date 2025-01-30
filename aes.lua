@@ -628,10 +628,11 @@ function Cipher:decrypt(src)
 end
 
 local CipherStream = {}
+CipherStream.mt = { __index = CipherStream }
 
 function CipherStream:new(o, cipher)
 	assert(o, 'Cannot new a abstract object')
-	setmetatable(o, {__index = self})
+	setmetatable(o, self.mt)
 	assert(cipher, 'Must give a cipher')
 	o.cipher = cipher
 	return o
@@ -668,10 +669,11 @@ end
 
 -- Electronic codebook mode
 
-local ECBStream = setmetatable({}, { __index = CipherStream })
+local ECBStream = setmetatable({}, CipherStream.mt)
+ECBStream.mt = { __index = ECBStream }
 
 function ECBStream:new(o, cipher)
-	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
+	o = setmetatable(CipherStream:new(o or {}, cipher), self.mt)
 	return o
 end
 
@@ -697,10 +699,11 @@ end
 
 -- Cipher block chaining mode
 
-local CBCStream = setmetatable({}, { __index = CipherStream })
+local CBCStream = setmetatable({}, CipherStream.mt)
+CBCStream.mt = { __index = CBCStream }
 
 function CBCStream:new(o, cipher, vec)
-	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
+	o = setmetatable(CipherStream:new(o or {}, cipher), self.mt)
 	o.enc_vec = vec or {0, 0, 0, 0}
 	o.dec_vec = o.enc_vec
 	return o
@@ -731,10 +734,11 @@ end
 
 -- Cipher feedback mode
 
-local CFBStream = setmetatable({}, { __index = CipherStream })
+local CFBStream = setmetatable({}, CipherStream.mt)
+CFBStream.mt = { __index = CFBStream }
 
 function CFBStream:new(o, cipher, vec)
-	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
+	o = setmetatable(CipherStream:new(o or {}, cipher), self.mt)
 	o.enc_vec = vec or {0, 0, 0, 0}
 	o.dec_vec = o.enc_vec
 	return o
@@ -765,10 +769,11 @@ end
 
 -- Output feedback mode
 
-local OFBStream = setmetatable({}, { __index = CipherStream })
+local OFBStream = setmetatable({}, CipherStream.mt)
+OFBStream.mt = { __index = OFBStream }
 
 function OFBStream:new(o, cipher, vec)
-	o = setmetatable(CipherStream:new(o or {}, cipher), {__index = self})
+	o = setmetatable(CipherStream:new(o or {}, cipher), self.mt)
 	o.enc_vec = vec or {0, 0, 0, 0}
 	o.dec_vec = o.enc_vec
 	return o

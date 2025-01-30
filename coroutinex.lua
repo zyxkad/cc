@@ -98,7 +98,7 @@ local Promise = {
 local function newPromise(thread)
 	assert(type(thread) == 'thread')
 	if coroutine.status(thread) == 'dead' then
-		error('Cannot wrap a dead thread as promise', 2)
+		error('Cannot wrap a dead thread as promise', 3)
 	end
 	local pm = {}
 	setmetatable(pm, Promise)
@@ -938,6 +938,7 @@ return {
 	exit = exit,
 	asleep = asleep,
 	yield = yield,
+	queueEvent = queueInternalEvent,
 	await = await,
 	awaitAny = awaitAny,
 	awaitRace = awaitRace,

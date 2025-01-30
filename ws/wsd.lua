@@ -1,7 +1,13 @@
 -- Websocket controller daemon
 -- by zyxkad@gmail.com
 
-local VERSION = '0.1'
+--[==[package:identifier
+ID = 'wsd'
+VERSION = '0.1.0'
+REQUIREMENTS = {
+	'coroutinex' = '^1.3.0'
+}
+--]==]
 
 local expect = require('cc.expect')
 
@@ -43,7 +49,7 @@ do
 			settings.set(name, v)
 		end
 	end
-	-- Installer
+	--- Begin Installer
 	if arg[1] == 'i' or arg[1] == 'install' or arg[1] == 'set' or arg[1] == 'setup' then
 		local function hadPrefix(str, prefix)
 			return #str > #prefix and str:sub(1, #prefix) == prefix
@@ -83,14 +89,15 @@ do
 		print(string.format('Moving %s to /startup.lua', progPath))
 		fs.move(progPath, '/startup.lua')
 		return true
-	end -- End Installer
+	end --- End Installer
 end
 
-local wsdPkg = {} -- export package
+local wsdPkg = {} -- export package:wsd
+local servicePkg = {} -- export package:service
 
 local crx = require('coroutinex')
+local Promise = crx.Promise
 local co_run = crx.run
-local co_exit = crx.exit
 local co_main = crx.main
 
 local function mustGetSetting(name)
@@ -121,9 +128,9 @@ local AUTH_TOKEN = mustGetSetting('wsd.auth')
 local TERMINATE_MAX_TRY = 10
 
 local ignoreEvents = {
+	-- From CC
+	-- websocket_message = true,
 	-- From wsd
-	_wsd_reply = true,
-	_wsd_yield = true,
 }
 
 local blockPassingEvents = {
@@ -140,7 +147,7 @@ local blockPassingEvents = {
 	term_resize = true,
 }
 
-local ws = nil -- see below `tryConnect`
+local ws = nil
 
 ---- BEGIN utils functions ----
 
@@ -176,16 +183,15 @@ local function ask(typ, data)
 		id = (id + 1) % 0x10000000
 	end
 	askinc = id
-	asking[id] = true
+	asking[id] = crx.current()
 	ws.send(textutils.serialiseJSON({
 		type = typ,
 		id = id,
 		data = data,
 	}))
 	while true do
-		local _, i, res = os.pullEvent('_wsd_reply')
+		local _, i, res = os.pullEvent('wsd_reply')
 		if i == id then
-			asking[id] = nil
 			return res
 		end
 	end
@@ -197,6 +203,68 @@ local function reply(id, data)
 		id = id,
 		data = data,
 	}))
+end
+
+local fetchingFiles = {}
+
+local function allocTempDir()
+	local dirName = string.format('/tmp/D%06d', math.floor(math.random() * 1000000))
+	fs.makeDir(dirName)
+	return dirName
+end
+
+local function downloadAndOpenFiles(files)
+	-- global: ws, fetchingFiles
+	if #files == 0 then
+		return {}
+	end
+
+	local tmpDir = allocTempDir()
+	local fileList = {}
+	local fileFlags = {}
+
+	local function fileCloser(index)
+		if not fileFlags[index] then
+			return
+		end
+		local path = fs.combine(tmpDir, string.format('F%02d.bin', index))
+		fs.delete(path)
+		fileFlags[index] = nil
+		if not next(fileFlags) then
+			fs.delete(tmpDir)
+		end
+	end
+
+	local currentPromise = crx.current()
+	for _, id in ipairs(files) do
+		fetchingFiles[id] = currentPromise
+	end
+	ws.send(textutils.serialiseJSON({
+		type = 'file_contents',
+		ids = files,
+	}))
+	for i, id in ipairs(files) do
+		local fid, content
+		repeat
+			_, fid, content = os.pullEvent('wsd_file_content')
+		until fid == id
+
+		local path = fs.combine(tmpDir, string.format('F%02d.bin', i))
+		local handler = fs.open(path, 'w+b')
+		local handler_close = handler.close
+		handler.close = function()
+			handler_close()
+			fileCloser(i)
+		end
+
+		handler.write(content)
+		handler.flush()
+		handler.seek('set', 0)
+
+		fileList[i] = handler
+		fileFlags[i] = true
+	end
+	return fileList
 end
 
 local function _newDefaultPalette()
@@ -227,6 +295,7 @@ local function newFakeTerm(id, width, height)
 	expect(2, width, 'number')
 	expect(3, height, 'number')
 
+	local usingWindowProxy = true
 	local fkTerm = {
 		isFake = true,
 		_cursorBlink = false,
@@ -237,6 +306,8 @@ local function newFakeTerm(id, width, height)
 		_textColor = colors.white,
 		_backgroundColor = colors.black,
 		_palette = _newDefaultPalette(),
+		_lines = {},
+		_updatedLines = {},
 	}
 
 	local running = true
@@ -291,6 +362,9 @@ local function newFakeTerm(id, width, height)
 	function fkTerm.setCursorPos(x, y)
 		expect(1, x, 'number')
 		expect(2, y, 'number')
+		if x == fkTerm._cursorX and y == fkTerm._cursorY then
+			return
+		end
 		_setCursorPos(x, y)
 		fkTerm._cursorX, fkTerm._cursorY = x, y
 	end
@@ -303,6 +377,9 @@ local function newFakeTerm(id, width, height)
 
 	function fkTerm.setCursorBlink(blink)
 		expect(1, blink, 'boolean')
+		if blink == fkTerm._cursorBlink then
+			return
+		end
 		_setCursorBlink(blink)
 		fkTerm._cursorBlink = blink
 	end
@@ -315,6 +392,9 @@ local function newFakeTerm(id, width, height)
 
 	function fkTerm.setTextColor(color)
 		expect(1, color, 'number')
+		if color == fkTerm._textColor then
+			return
+		end
 		_setTextColor(color)
 		fkTerm._textColor = color
 	end
@@ -329,6 +409,9 @@ local function newFakeTerm(id, width, height)
 
 	function fkTerm.setBackgroundColor(color)
 		expect(1, color, 'number')
+		if color == fkTerm._backgroundColor then
+			return
+		end
 		_setBackgroundColor(color)
 		fkTerm._backgroundColor = color
 	end
@@ -341,7 +424,13 @@ local function newFakeTerm(id, width, height)
 
 	local _write = newOper('write')
 	function fkTerm.write(text)
+		if usingWindowProxy then
+			error('You should not modify the terminal by raw', 1)
+		end
 		text = tostring(text)
+		if #text == 0 then
+			return
+		end
 		_write(text)
 		fkTerm._cursorX = fkTerm._cursorX + #text
 	end
@@ -355,8 +444,18 @@ local function newFakeTerm(id, width, height)
 		if len ~= #color or len ~= #bgColor then
 			error('The arguments must have the same length', 2)
 		end
-		_blit(text, color, bgColor)
+		if usingWindowProxy and len ~= fkTerm._width then
+			error('You should not modify the terminal by raw', 1)
+		end
+		if len == 0 then
+			return
+		end
 		fkTerm._cursorX = fkTerm._cursorX + len
+		if usingWindowProxy then
+			fkTerm._updatedLines[tostring(fkTerm._cursorY)] = {text, color, bgColor}
+		else
+			_blit(text, color, bgColor)
+		end
 	end
 
 	function fkTerm.isColor()
@@ -376,9 +475,8 @@ local function newFakeTerm(id, width, height)
 			expect(3, g, 'number')
 			expect(4, b, 'number')
 			r = colors.packRGB(r, g, b)
-			_setPaletteColor(color, r)
-			fkTerm._palette[color] = r
-		else
+		end
+		if r ~= fkTerm._palette[color] then
 			_setPaletteColor(color, r)
 			fkTerm._palette[color] = r
 		end
@@ -400,35 +498,6 @@ end
 
 ---- END utils functions ----
 
-local function tryConnect()
-	assert(not ws, 'websocket already connected')
-	local err
-	while true do
-		print('Connecting to ['..HOST..'] ...')
-		ws, err = http.websocket(
-			HOST,
-			{
-				['User-Agent'] = string.format('cc-websocket-daemon/%s (%s)', VERSION, _HOST),
-				['X-CC-Auth'] = AUTH_TOKEN,
-				['X-CC-Host'] = SERVER,
-				['X-CC-ID'] = tostring(os.getComputerID()),
-				['X-CC-Device'] = getDeviceType(),
-				['X-CC-Label'] = os.getComputerLabel(),
-			}
-		)
-		if ws then
-			print('Remote connected')
-			co_exit(ws)
-			return ws
-		end
-		if not settings.get('wsd.reconnect', true) then
-			error(string.format('Cannot connect to [%s]: %s', HOST, err), 3)
-		end
-		printError("Couldn't connect:", err)
-		sleep(3)
-	end
-end
-
 ---- BEGIN programs ----
 
 local programs = {}
@@ -439,110 +508,68 @@ local function create_program(tid, path, args, width, height)
 	expect(3, args, 'table')
 	expect(4, width, 'number')
 	expect(5, height, 'number')
-	local prog = {
-		queuedEvents = {},
-	}
+	local prog = {}
 	programs[tid] = prog
-	function prog.queueEvent(event, ...)
-		prog.queuedEvents[#prog.queuedEvents + 1] = {
-			event, ...,
-		}
-		os.queueEvent('_wsd_yield')
-	end
 	local progTerm = newFakeTerm(tid, width, height)
-	local env = { shell = shell, multishell = multishell }
+	local env = { shell = shell, multishell = multishell, wsd = wsdPkg }
 	prog.term = progTerm
-	prog.thr = coroutine.create(function()
-		local ok
+	prog.window = window.create(progTerm, 1, 1, width, height, false)
+	prog.window.isFake = true
+	prog.window.isRunning = function() return prog.term.isRunning() end
+	prog.activeTerm = prog.window
+	prog.promise = co_run(function()
+		sleep(0)
 		if path == SHELL_PATH then
-			ok = os.run(env, path, table.unpack(args))
+			return os.run(env, path, table.unpack(args))
 		else
-			ok = os.run(env, SHELL_PATH, path, table.unpack(args))
+			return os.run(env, SHELL_PATH, path, table.unpack(args))
 		end
-		progTerm.close()
-		programs[tid] = nil
-		reply(tid, ok)
 	end)
+	local lastOldTerm = nil
+	prog.promise._beforeResumeHook = function()
+		-- global: oldTerm
+		lastOldTerm = oldTerm
+		oldTerm = term.redirect(prog.activeTerm)
+	end
+	prog.promise._afterResumeHook = function()
+		-- global: oldTerm
+		prog.activeTerm = term.redirect(oldTerm)
+		oldTerm = lastOldTerm
+	end
 	return prog
 end
 
 local function kill_program(prog)
-	local isdead = false
-	oldTerm = term.redirect(prog.term)
-	for i = 1, TERMINATE_MAX_TRY do
-		local ok, err = coroutine.resume(prog.thr, 'terminate')
-		if not ok then
-			prog.term = term.redirect(oldTerm)
-			oldTerm = nil
-			error(err, 1)
-		end
-		if coroutine.status(prog.thr) == 'dead' then
-			isdead = true
-			break
-		end
-	end
-	prog.term = term.redirect(oldTerm)
-	oldTerm = nil
-	return isdead
-end
-
-local function resume_program(prog, eventData)
-	local eventType = eventData[1]
-	if eventType == 'kill' then
-		kill_program(prog)
-		return false
-	end
-	if eventType == '_wsd_yield' then
-		return true
-	end
-	if prog.eventFilter == nil or prog.eventFilter == eventType then
-		prog.eventFilter = nil
-		oldTerm = term.redirect(prog.term)
-		local ok, data = coroutine.resume(prog.thr, table.unpack(eventData))
-		prog.term = term.redirect(oldTerm)
-		oldTerm = nil
-		if not ok then
-			error(data, 1)
-		end
-		if coroutine.status(prog.thr) == 'dead' then
-			return false
-		end
-		if type(data) == 'string' then
-			prog.eventFilter = data
-		end
-	end
-	return true
+	local stopped = false
+	stopped = prog.promise:stop()
+	return stopped
 end
 
 local function programRunner()
-	-- global: oldTerm
-	local eventData = {}
 	while true do
+		sleep(0)
 		for i, prog in pairs(programs) do
-			local ok = resume_program(prog, eventData)
-			if ok and #prog.queuedEvents > 0 then
-				local events = prog.queuedEvents
-				prog.queuedEvents = {}
-				for _, edata in ipairs(events) do
-					ok = resume_program(prog, edata)
-					if not ok then
-						break
-					end
-				end
+			local updatedLines = prog.window._updatedLines
+			if next(updatedLines) ~= nil then
+				prog.window._updatedLines = {}
+				ws.send(textutils.serialiseJSON({
+					type = 'term_update',
+					data = {
+						term = id,
+						lines = updatedLines,
+					},
+				}))
 			end
-			if not ok then
+			if prog.status ~= Promise.PENDING then
+				prog.term.close()
 				programs[i] = nil
+				local ok = prog.status == Promise.FULFILLED
+				if ok then
+					ok = result[1]
+				end
+				reply(i, ok)
 			end
 		end
-		local flag
-		repeat
-			flag = true
-			eventData = {os.pullEvent()}
-			local eventTyp = eventData[1]
-			if blockPassingEvents[eventTyp] then
-				flag = false
-			end
-		until flag
 	end
 end
 
@@ -552,67 +579,102 @@ end
 
 local services = {}
 
-local function create_service(sid, path)
+local function preload_service(sid, path)
 	expect(1, sid, 'string')
 	expect(2, path, 'string')
-	local svs = {
-		queuedEvents = {},
-	}
+
+	print(string.format('Loading service: [%s]', sid))
 	if services[sid] then
-		error(string.format('Service [%s] already exists', sid), 2)
+		error(string.format('Service [%s] is already exists', sid), 2)
 	end
-	services[sid] = svs
-	function svs.queueEvent(event, ...)
-		svs.queuedEvents[#svs.queuedEvents + 1] = {
-			event, ...,
+
+	local serviceRegistrablePkg = setmetatable({}, { __index = servicePkg })
+	local serviceBuilder = nil
+
+	function serviceRegistrablePkg.register(func)
+		if serviceBuilder ~= nil then
+			error('service.register called twice', 2)
+		end
+		expect(1, func, 'function')
+		serviceBuilder = {
+			_func = func,
+			_requires = {},
+			_suggests = {},
 		}
-		os.queueEvent('_wsd_yield')
+
+		function serviceBuilder.require(name, version, soft)
+			version = version or '*'
+			expect(1, name, 'string')
+			expect(2, version, 'string')
+			expect(3, soft, 'boolean', 'nil')
+			if serviceBuilder._requires[name] or serviceBuilder._suggests[name] then
+				error('Dependence ' .. name .. ' is already exists', 2)
+			end
+			if soft then
+				serviceBuilder._suggests[name] = version
+			else
+				serviceBuilder._requires[name] = version
+			end
+		end
+
+		function serviceBuilder.suggest(name, version)
+			expect(1, name, 'string')
+			expect(2, version, 'string')
+			serviceBuilder.require(name, version, true)
+		end
+
+		return serviceBuilder
 	end
+
+	local env = { shell = shell, multishell = multishell, wsd = wsdPkg, service = serviceRegistrablePkg }
+	local ok = os.run(env, path)
+	if not ok then
+		print(string.format('Service register [%s] exited unexpectedly', sid))
+		return
+	end
+
+	if serviceBuilder == nil then
+		print(string.format('Service register [%s] did not invoke service.register', sid))
+		return
+	end
+
 	local cterm = term.current()
 	local width, height = cterm.getSize()
 	local svsTerm = window.create(cterm, 1, 2, width, height, false)
-	local env = { shell = shell, multishell = multishell, wsd = wsdPkg }
+	local svs = {}
+	services[sid] = svs
 	svs.term = svsTerm
-	svs.thr = coroutine.create(function()
-		local ok = os.run(env, path)
-		svsTerm.close()
-		services[sid] = nil
-		if not ok then
-			print(string.format('Service [%s] exited unexpectedly', sid))
-		end
-	end)
+	svs.activeTerm = svs.term
+	svs.entry = serviceBuilder._func
+	svs.requires = serviceBuilder._requires
+	svs.suggests = serviceBuilder._suggests
+	svs.promise = co_run(svs.entry)
+	local lastOldTerm = nil
+	svs.promise._beforeResumeHook = function()
+		-- global: oldTerm
+		lastOldTerm = oldTerm
+		oldTerm = term.redirect(svs.activeTerm)
+	end
+	svs.promise._afterResumeHook = function()
+		-- global: oldTerm
+		svs.activeTerm = term.redirect(oldTerm)
+		oldTerm = lastOldTerm
+	end
 	return svs
 end
 
 local function serviceRunner()
 	-- global: services
-	local eventData = {}
 	while true do
-		for i, prog in pairs(services) do
-			local ok = resume_program(prog, eventData)
-			if ok and #prog.queuedEvents > 0 then
-				local events = prog.queuedEvents
-				prog.queuedEvents = {}
-				for _, edata in ipairs(events) do
-					ok = resume_program(prog, edata)
-					if not ok then
-						break
-					end
+		sleep(1)
+		for i, svs in pairs(services) do
+			if svs.status ~= Promise.PENDING then
+				services[i] = nil
+				if svs.status ~= Promise.FULFILLED then
+					print(string.format('Service [%s] exited unexpectedly', sid))
 				end
 			end
-			if not ok then
-				services[i] = nil
-			end
 		end
-		local flag
-		repeat
-			flag = true
-			eventData = {os.pullEvent()}
-			local eventTyp = eventData[1]
-			if blockPassingEvents[eventTyp] then
-				flag = false
-			end
-		until flag
 	end
 end
 
@@ -625,14 +687,12 @@ local function loadServices()
 			if fs.isDir(path) then
 				path = fs.combine(path, 'init.lua')
 				if fs.exists(path) and not fs.isDir(path) then
-					create_service(name, path)
-					print(string.format('Loading service: [%s]', name))
+					preload_service(name, path)
 				end
 			else
 				local isLua, sid = removeSuffix(name, '.lua')
 				if isLua then
-					create_service(sid, path)
-					print(string.format('Loading service: [%s]', sid))
+					preload_service(sid, path)
 				end
 			end
 		end
@@ -641,31 +701,52 @@ end
 
 ---- AFTER service ----
 
-local function _keyProcessor(code, ...)
-	return keys[code], ...
+local function newFileHandlers(files)
+	local fileList = nil
+
+	fileListHandler.getFiles = function()
+		if fileList == nil then
+			fileList = false
+			fileList = downloadAndOpenFiles(files)
+		elseif fileList == false then
+			error('Do not call getFiles synchronously', 1)
+		end
+		return fileList
+	end
+
+	return fileListHandler
 end
 
-local function newRemoteFileReader(fid)
-	local file = {}
-	-- TODO
-	return file
+local function _keyProcessor(code, ...)
+	return keys[code], ...
 end
 
 local eventPreProcessors = {
 	key = _keyProcessor,
 	key_up = _keyProcessor,
-	file_transfer = function(flist)
-		return
+	file_transfer = function(files)
+		return newFileHandlers(files)
 	end,
 }
 
 local function listenWs()
 	local handlers = {
 		terminate = function(msg)
-			error("Remotely Terminated", 0)
+			error('Remotely Terminated', 0)
 		end,
+		shutdown = function(msg)
+			os.shutdown()
+		end,
+		reboot = function(msg)
+			os.reboot()
+		end,
+
 		reply = function(msg)
-			os.queueEvent('_wsd_reply', msg.id, msg.data)
+			local pm = asking[id]
+			if pm then
+				asking[id] = nil
+				pm:queueEvent('wsd_reply', msg.id, msg.data)
+			end
 		end,
 		ping = function(msg)
 			-- maybe will use later
@@ -720,7 +801,6 @@ local function listenWs()
 				return
 			end
 			create_program(id, path, args, width, height)
-			os.queueEvent('_wsd_yield')
 		end,
 		term_event = function(msg)
 			local tid = msg.term
@@ -730,9 +810,9 @@ local function listenWs()
 			if prog then
 				local processor = eventPreProcessors[event]
 				if processor then
-					prog.queueEvent(event, processor(table.unpack(args)))
+					prog:queueEvent(event, processor(table.unpack(args)))
 				else
-					prog.queueEvent(event, table.unpack(args))
+					prog:queueEvent(event, table.unpack(args))
 				end
 			end
 		end,
@@ -742,28 +822,46 @@ local function listenWs()
 			local args = msg.args or {}
 			local serv = services[sid]
 			if serv then
-				serv.queueEvent(event, table.unpack(args))
+				serv:queueEvent(event, table.unpack(args))
 			end
 		end,
 	}
+
+	local binaryHandlers = {
+		file_content = function(data)
+			local fid = string.byte(data, 1, 1) * 0x100 + string.byte(data, 2, 2)
+			local pm = fetchingFiles[fid]
+			if pm then
+				local content = data:sub(3)
+				pm:queueEvent('wsd_file_content', fid, content)
+			end
+		end
+	}
+
 	while true do
 		local data, bin = ws.receive()
-		if data then
-			if bin then
-				printError('WARN: Unexpect binary data received')
+		if not data then
+			printError('Websocket closed')
+			break
+		end
+
+		if bin then
+			local len = string.byte(data, 1, 1)
+			local msgType = data:sub(2, 1 + len)
+			local h = binaryHandlers[msgType]
+			if h then
+				h(data:sub(2 + len))
 			else
-				local msg = textutils.unserialiseJSON(data)
-				local h = handlers[msg.type]
-				if h then
-					h(msg)
-				else
-					printError('WARN: Unexpect msg type ['..msg.type..']')
-				end
+				printError(string.format('WARN: Unexpect binary msg type [%s]', msg.type))
 			end
 		else
-			printError('Websocket closed')
-			co_exit(settings.get('wsd.reconnect'))
-			break
+			local msg = textutils.unserialiseJSON(data)
+			local h = handlers[msg.type]
+			if h then
+				h(msg)
+			else
+				printError(string.format('WARN: Unexpect msg type [%s]', msg.type))
+			end
 		end
 	end
 end
@@ -786,37 +884,65 @@ end
 
 local function listenEvent()
 	while true do
-		sendEvent({os.pullEvent()})
+		sendEvent({ os.pullEvent() })
+	end
+end
+
+local function tryConnect()
+	while true do
+		print('Connecting to ['..HOST..'] ...')
+		local ws, err = http.websocket(
+			HOST,
+			{
+				['User-Agent'] = string.format('cc-websocket-daemon/%s (%s)', VERSION, _HOST),
+				['X-CC-Auth'] = AUTH_TOKEN,
+				['X-CC-Host'] = SERVER,
+				['X-CC-ID'] = tostring(os.getComputerID()),
+				['X-CC-Device'] = getDeviceType(),
+				['X-CC-Label'] = os.getComputerLabel(),
+			}
+		)
+		if ws then
+			print('Remote connected')
+			return ws
+		end
+		if not settings.get('wsd.reconnect', true) then
+			error(string.format('Cannot connect to [%s]: %s', HOST, err), 3)
+		end
+		printError("Couldn't connect:", err)
+		sleep(3)
 	end
 end
 
 local function main()
+	-- global: ws
+	fs.delete('/tmp')
+
 	local reconnect
 	loadServices()
 	repeat
 		ws = nil
-		co_main(tryConnect, {
-			event = 'terminate',
-			callback = function()
-				return settings.get('wsd.terminate', true)
-			end
-		})
-		reconnect = co_main(listenWs, listenEvent, serviceRunner, programRunner, {
-			event = 'terminate',
-			callback = function()
-				if settings.get('wsd.terminate', true) then
-					ws.send(textutils.serialiseJSON({
-						type = 'terminated',
-					}))
-					return true
-				end
-				ws.send(textutils.serialiseJSON({
-					type = 'terminate',
-				}))
-				return false
-			end,
-		})
-	until not reconnect
+		ws = tryConnect()
+		await(listenWs, listenEvent, serviceRunner, programRunner)
+	until not settings.get('wsd.reconnect')
 end
 
-main()
+co_main(main, {
+	event = 'terminate',
+	callback = function()
+		local shouldTerminate = settings.get('wsd.terminate', true)
+		if ws == nil then
+			return shouldTerminate
+		end
+		if shouldTerminate then
+			ws.send(textutils.serialiseJSON({
+				type = 'terminated',
+			}))
+			return true
+		end
+		ws.send(textutils.serialiseJSON({
+			type = 'terminate',
+		}))
+		return false
+	end,
+})

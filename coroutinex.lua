@@ -2,7 +2,12 @@
 -- simulate JavaScript async process in Lua
 -- by zyxkad@gmail.com
 
-local VERSION = '1.2.0'
+--[==[package:identifier
+ID = 'coroutinex'
+VERSION = '1.2.1'
+--]==]
+
+local VERSION = '1.2.1'
 
 ---- BEGIN debug ----
 
@@ -63,6 +68,7 @@ end
 ---- END debug ----
 
 local EMPTY_TABLE = {}
+local TERMINATE_MAX_TRY = 10
 
 local function execute(command, ...)
 	assert(type(command) == 'string')
@@ -83,34 +89,11 @@ local Promise = {
 	-- _result = nil, -- table list or error
 	-- _status = Promise.PENDING, -- PENDING, FULFILLED, or REJECTED
 	-- _runon  = nil, -- an address represent which base routine is it running on
+	-- _requestedYield = false, -- If the thread requested a yield
+	-- _queuedEvents = {}, -- Internal queued events
+	-- _beforeResumeHook = function,
+	-- _afterResumeHook = function,
 }
-
-function Promise.__index(pm, key)
-	if key == 'native' then
-		return pm._native
-	elseif key == 'result' then
-		return pm._result
-	elseif key == 'status' then
-		return pm._status
-	end
-	return Promise[key]
-end
-
-function Promise.__tostring(pm)
-	local s = 'Promise{status='
-	if pm._status == Promise.PENDING then
-		s = s .. 'pending'
-	elseif pm._status == Promise.FULFILLED then
-		s = s .. 'fulfilled'
-	elseif pm._status == Promise.REJECTED then
-		s = s .. 'rejected'
-	else
-		s = s .. 'unknown ' .. tostring(pm._status)
-	end
-	s = s .. ', ' .. tostring(pm._native)
-	s = s .. '}'
-	return s
-end
 
 local function newPromise(thread)
 	assert(type(thread) == 'thread')
@@ -122,7 +105,66 @@ local function newPromise(thread)
 	pm._native = thread
 	pm._status = Promise.PENDING
 	pm._timers = {}
+	pm._requestedYield = false
+	pm._queuedEvents = {}
+	pm._beforeResumeHook = nil
+	pm._afterResumeHook = nil
 	return pm
+end
+
+function Promise:__index(key)
+	if key == 'native' then
+		return self._native
+	elseif key == 'result' then
+		return self._result
+	elseif key == 'status' then
+		return self._status
+	end
+	return Promise[key]
+end
+
+function Promise:__tostring()
+	local s = 'Promise{status='
+	if self._status == Promise.PENDING then
+		s = s .. 'pending'
+	elseif self._status == Promise.FULFILLED then
+		s = s .. 'fulfilled'
+	elseif self._status == Promise.REJECTED then
+		s = s .. 'rejected'
+	else
+		s = s .. 'unknown ' .. tostring(self._status)
+	end
+	s = s .. ', ' .. tostring(self._native)
+	s = s .. '}'
+	return s
+end
+
+function Promise:queueEvent(event, ...)
+	assert(type(event) == 'string')
+	self._queuedEvents[#self._queuedEvents + 1] = {event, ...}
+end
+
+--- Promise:stop keep fires terminate event on the thread until the thread exits
+-- the thread may cancel the stop process by yield true
+--
+-- @return true if the thread stopped
+function Promise:stop()
+	local stopped = execute('/stop', self)
+	if type(stopped) == 'string' then
+		error(stopped, 2)
+	end
+	return stopped
+end
+
+function Promise:resume(...)
+	if pm._beforeResumeHook then
+		pm._beforeResumeHook()
+	end
+	local res = table.pack(coroutine.resume(rn, ...))
+	if pm._afterResumeHook then
+		pm._afterResumeHook()
+	end
+	return table.unpack(res, 1, res.n)
 end
 
 local function isPromise(pm)
@@ -139,7 +181,11 @@ end
 local function run(pm, ...)
 	if type(pm) == 'function' then
 		local fn, args = pm, table.pack(...)
-		pm = newPromise(coroutine.create(function() return fn(table.unpack(args, 1, args.n)) end))
+		if args.n == 0 then
+			pm = newPromise(coroutine.create(fn))
+		else
+			pm = newPromise(coroutine.create(function() return fn(table.unpack(args, 1, args.n)) end))
+		end
 	elseif type(pm) == 'thread' then
 		pm = newPromise(pm)
 	elseif not isPromise(pm) then
@@ -411,6 +457,7 @@ local function main(...)
 	local newRountine = false
 	local function run(pm)
 		pm._runon = RUNTIME_DATA
+		pm._requestedYield = true
 		local j = #routineIds + 1
 		routineIds[j] = pm
 		routines[pm] = j
@@ -427,7 +474,7 @@ local function main(...)
 	local function terminateAll(...)
 		for i, r in pairs(routineIds) do
 			if coroutine.status(r.native) ~= 'dead' then
-				coroutine.resume(r.native, 'terminate', ...)
+				r:resume('terminate', ...)
 			end
 		end
 	end
@@ -475,43 +522,64 @@ local function main(...)
 
 	while true do
 		local finishedIds = {}
-		local instantResume = false
 		local keepLoop = false
-		local eventType = eventData[1]
 		needForceYield = false
 
 		applyOSPatches()
 		while true do
 			newRountine = false
+			local instantResume = false
+			local instantResumed = eventData == nil
 			for i, r in pairs(routineIds) do
 				if not finishedIds[i] then
 					keepLoop = true
 					finishedIds[i] = true
 					local filter = eventFilter[r]
-					local allowAny = filter == EMPTY_TABLE
-					local filterOk = allowAny or filter == nil or filter == eventType
-					if not allowAny and filterOk then
-						if optPatchOSTimer and eventType == 'timer' then
-							local timerId = eventData[2]
-							if r._timers[timerId] then
-								r._timers[timerId] = nil
-							else
-								filterOk = false
+					local filterOk = false
+					local next = eventData
+					if instantResumed then -- Instant resumed
+						if r._requestedYield then
+							r._requestedYield = false
+							filterOk = true
+						else
+							local queuedEvent = table.remove(r._queuedEvents, 1)
+							if queuedEvent then
+								next = queuedEvent
+								filterOk = true
 							end
-						elseif type(eventType) == 'string' and eventType:sub(1, 1) == '#' then
-							filterOk = filter == '#' or filter == eventType
+						end
+					end
+					if not filterOk and not instantResumed then
+						local eventType = next[1]
+						filterOk = filter == nil or filter == eventType
+						if filterOk and type(eventType) == 'string' then
+							if optPatchOSTimer and eventType == 'timer' then
+								local timerId = next[2]
+								if r._timers[timerId] then
+									r._timers[timerId] = nil
+								else
+									filterOk = false
+								end
+							elseif eventType:sub(1, 1) == '#' then
+								filterOk = filter == '#' or filter == eventType
+							end
 						end
 					end
 					if filterOk then
 						eventFilter[r] = nil
-						local next = eventData
 						repeat
 							if _eventLogFile and _DEBUG_RESUME then
 								_eventLogFile.write(string.format('%.02f resuming %s %s\n', os.clock(), r, next[1]))
 								_eventLogFile.flush()
 							end
 							local rn = r.native
-							local res = table.pack(coroutine.resume(rn, table.unpack(next, 1, next.n)))
+							if pm._beforeResumeHook then
+								pm._beforeResumeHook()
+							end
+							local res = table.back(r:resume(table.unpack(next, 1, next.n)))
+							if pm._afterResumeHook then
+								pm._afterResumeHook()
+							end
 							next = false
 							local ok, data = res[1], res[2]
 							if not ok then -- when error occurred
@@ -560,7 +628,7 @@ local function main(...)
 									elseif command == '/current' then
 										next = {'^'..command, r}
 									elseif command == '/yield' then
-										eventFilter[r] = EMPTY_TABLE
+										r._requestedYield = true
 										instantResume = true
 									elseif command == '/queue' then
 										queueInternalEvent(table.unpack(res, 4, res.n))
@@ -597,18 +665,29 @@ local function main(...)
 										end
 										local j = routines[pm]
 										if j then
-											local ok, data = coroutine.resume(pm.native, 'terminate', '/stop', r)
-											if not ok or not data then
-												routineIds[j] = nil
-												routines[pm] = nil
-												pm._status = Promise.REJECTED
-												pm._result = data
-												if _eventLogFile then
-													_eventLogFile.write(string.format('%.02f terminated %s\n', os.clock(), pm))
-													_eventLogFile.flush()
+											local stopped = false
+											for i = 1, TERMINATE_MAX_TRY do
+												local ok, data = pm:resume('terminate', '/stop', r)
+												if coroutine.status(pm.native) == 'dead' then
+													routineIds[j] = nil
+													routines[pm] = nil
+													pm._status = ok and Promise.FULFILLED or Promise.REJECTED
+													pm._result = data
+													if _eventLogFile then
+														_eventLogFile.write(string.format('%.02f terminated %s\n', os.clock(), pm))
+														_eventLogFile.flush()
+													end
+													queueCoroutineDoneEvent(r, ok, data)
+													stopped = true
+													break
 												end
-												queueCoroutineDoneEvent(r, false, data)
+												if ok and data == true then
+													break
+												end
 											end
+											next = {'^'..command, stopped}
+										else
+											next = {'^'..command, true}
 										end
 									end
 								end
@@ -618,7 +697,15 @@ local function main(...)
 				end
 			end
 			if not newRountine and not instantResume then
-				break
+				for i, r in pairs(routineIds) do
+					if r._queuedEvents[1] ~= nil then
+						instantResume = true
+						break
+					end
+				end
+				if not instantResume then
+					break
+				end
 			end
 			needForceYield = os.epoch('utc') - lastYield > maxYieldInterval
 			if needForceYield then
@@ -627,8 +714,7 @@ local function main(...)
 			if instantResume then
 				finishedIds = {}
 			end
-			eventType = nil
-			eventData = EMPTY_TABLE
+			eventData = nil
 		end
 		revertOSPatches()
 

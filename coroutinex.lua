@@ -4,10 +4,10 @@
 
 --[==[package:identifier
 ID = 'coroutinex'
-VERSION = '1.2.1'
+VERSION = '1.3.0'
 --]==]
 
-local VERSION = '1.2.1'
+local VERSION = '1.3.0'
 
 ---- BEGIN debug ----
 
@@ -157,12 +157,12 @@ function Promise:stop()
 end
 
 function Promise:resume(...)
-	if pm._beforeResumeHook then
-		pm._beforeResumeHook()
+	if self._beforeResumeHook then
+		self._beforeResumeHook()
 	end
-	local res = table.pack(coroutine.resume(rn, ...))
-	if pm._afterResumeHook then
-		pm._afterResumeHook()
+	local res = table.pack(coroutine.resume(self._native, ...))
+	if self._afterResumeHook then
+		self._afterResumeHook()
 	end
 	return table.unpack(res, 1, res.n)
 end
@@ -207,11 +207,6 @@ end
 --- asleep(n) is an alias of `run(sleep, n)`
 local function asleep(n)
 	return run(sleep, n)
-end
-
---- nextTick gives up current iteration round and resumes in the next tick.
-local function nextTick()
-	coroutine.yield('#crx_tick')
 end
 
 --- yield gives up current iteration round.
@@ -541,6 +536,7 @@ local function main(...)
 						if r._requestedYield then
 							r._requestedYield = false
 							filterOk = true
+							next = EMPTY_TABLE
 						else
 							local queuedEvent = table.remove(r._queuedEvents, 1)
 							if queuedEvent then
@@ -573,13 +569,7 @@ local function main(...)
 								_eventLogFile.flush()
 							end
 							local rn = r.native
-							if pm._beforeResumeHook then
-								pm._beforeResumeHook()
-							end
-							local res = table.back(r:resume(table.unpack(next, 1, next.n)))
-							if pm._afterResumeHook then
-								pm._afterResumeHook()
-							end
+							local res = table.pack(r:resume(table.unpack(next, 1, next.n)))
 							next = false
 							local ok, data = res[1], res[2]
 							if not ok then -- when error occurred
@@ -725,10 +715,18 @@ local function main(...)
 		if not needForceYield and #internalEvents > 0 then
 			eventData = table.remove(internalEvents, 1)
 		else
+			if needForceYield then
+				os.queueEvent('')
+			end
 			local flag
 			repeat
 				flag = true
 				eventData = table.pack(coroutine.yield())
+				if eventData[1] == '' then
+					eventData = EMPTY_TABLE
+					flag = false
+					break
+				end
 				lastYield = os.epoch('utc')
 				if optPatchOSTimer and eventData[1] == 'timer' and eventData[2] == tickTimerId then
 					tickTimerId = os.startTimer(0)
@@ -740,11 +738,8 @@ local function main(...)
 							queueInternalEvent('timer', id)
 						end
 					end
-					if waitingTick then
-						eventData = {'#crx_tick'}
-					elseif #internalEvents > 0 then
-						eventData = table.remove(internalEvents, 1)
-					else
+					eventData = table.remove(internalEvents, 1)
+					if eventData == nil then
 						flag = false
 					end
 				else
@@ -769,9 +764,9 @@ local function main(...)
 						end
 					end
 				end
-			until needForceYield or flag
+			until flag
 			if needForceYield and not flag then
-				eventData = EMPTY_TABLE
+				eventData = table.remove(internalEvents, 1) or EMPTY_TABLE
 			end
 			if eventData[1] == 'terminate' then
 				terminateAll(table.unpack(eventData, 2, eventData.n))
@@ -942,7 +937,6 @@ return {
 	run = run,
 	exit = exit,
 	asleep = asleep,
-	nextTick = nextTick,
 	yield = yield,
 	await = await,
 	awaitAny = awaitAny,

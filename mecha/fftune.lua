@@ -62,34 +62,37 @@ sleep(1)
 local tservos = servos.leftBtmLeg
 
 tservos.setPositionMode(true)
-tservos.setPosPID(3, 0, 3)
-tservos.setVelPID(3e7, 3e7, 0)
+tservos.setPosPID(1, 0, 3)
+tservos.setVelPID(3e7, 1e7, 0)
+tservos.setMaxRotationSpeed(math.rad(90))
 -- tservos.setTargetVelocity(0)
+tservos.setFeedForwardForce(0)
 tservos.setTargetAngle(math.rad(45))
-
--- 10, 4938696
--- 20, 10363793
--- 30, 15066371
--- 45, 21032332
--- 60, 22000000
--- tservos.setFeedForwardForce(1e7)
 
 local function logger()
 	local lastt = os.epoch('utc')
 	local lastd = tservos[1].getCurrentAngle()
+	local ntservos = #tservos
 	while true do
 		os.queueEvent('_logger')
 		os.pullEvent('_logger')
 		local t = os.epoch('utc')
-		local d = tservos[1].getCurrentAngle()
-		local f = tservos[1].getLastTorque()
 		local dt = (t - lastt) / 1000
-		local v = (lastd - d) / dt
+		if dt >= 1 / 60 then
+			local d = tservos[1].getCurrentAngle()
+			local f = 0
+			for i = 1, ntservos do
+				f = f + tservos[i].getLastTorque()
+			end
+			f = f / ntservos
+			local v = (d - lastd) / dt
+			lastd, lastt = d, t
 
-		local sinFeed = f / math.sin(d)
-		local cosFeed = f / math.cos(d)
+			local sinFeed = f / math.sin(d)
+			local cosFeed = f / math.cos(d)
 
-		print(string.format('%+9.5f %+8.5f %+8d %+8d %+8d', math.deg(d), math.deg(v), f, sinFeed, cosFeed))
+			print(string.format('%+9.5f %+9.6f %+9d %+9d %+9d', math.deg(d), math.deg(v), f, sinFeed, cosFeed))
+		end
 	end
 end
 

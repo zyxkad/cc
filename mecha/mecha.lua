@@ -5,14 +5,14 @@ local servos = {}
 local grasps = {}
 
 local feedForwardForces = {
-	leftTopLeg = 1.464e7,
-	rightTopLeg = 1.464e7,
-	leftBtmLeg = 5.338e6,
-	rightBtmLeg = 5.338e6,
-	leftTopLeg_sp = -2.71e7,
-	rightTopLeg_sp = -2.71e7,
-	leftBtmLeg_sp = -4.06e7,
-	rightBtmLeg_sp = -4.06e7,
+	leftTopLeg = 1.429e7,
+	rightTopLeg = 1.429e7,
+	leftBtmLeg = 5.3155e6,
+	rightBtmLeg = 5.3155e6,
+	leftTopLeg_sp = -2.8e7,
+	rightTopLeg_sp = -2.8e7,
+	leftBtmLeg_sp = -3.71e7,
+	rightBtmLeg_sp = -3.71e7,
 }
 
 local PeripheralList = {}
@@ -21,15 +21,18 @@ function PeripheralList.__index(list, method)
 	if type(method) ~= 'string' then
 		return nil
 	end
-	if method == 'any' then
-		return function (method)
+	if method == 'atleast' then
+		return function (method, need)
 			for i, p in ipairs(list) do
 				local r = p[method]()
 				if r then
-					return r
+					need = need - 1
+					if need <= 0 then
+						return true
+					end
 				end
 			end
-			return nil
+			return false
 		end
 	end
 	if list[1] == nil or type(list[1][method]) ~= 'function' then
@@ -62,6 +65,7 @@ for _, servo in pairs({peripheral.find('servo')}) do
 		end
 		servo.setEnabled(true)
 		servo.setPositionMode(true)
+		servo.setMaxRotationSpeed(math.rad(360))
 		list[#list + 1] = servo
 	end
 end
@@ -92,8 +96,8 @@ end
 local rightAngleOffset = 0
 local leftAngleOffset = 0
 
-local supportingPID = {3e7, 3e7, 0}
-local steppingPID = {3e7, 1e7, 0}
+local supportingPID = {2e7, 1e6, 0}
+local steppingPID = {6e6, 1e6, 0}
 local supporting = {
 	leftTopLeg = false,
 	leftBtmLeg = false,
@@ -128,7 +132,7 @@ end
 local function resetPID()
 	local servosList = {servos.leftTopLeg, servos.leftBtmLeg, servos.rightTopLeg, servos.rightBtmLeg}
 	do
-		local p, i, d = 3, 0, 2.5
+		local p, i, d = 7, 0, 4
 		print('Setting position PID:', p, i, d)
 
 		for _, l in ipairs(servosList) do
@@ -161,31 +165,31 @@ local function moveTo(servos, target, err)
 end
 
 local function stepRight()
+	moveTo(servos.rightBtmLeg, rightAngleOffset + math.rad(-60), math.rad(15))
 	parallel.waitForAll(function()
-		moveTo(servos.rightBtmLeg, rightAngleOffset + math.rad(-60), math.rad(15))
-		moveTo(servos.rightTopLeg, rightAngleOffset + math.rad(60), math.rad(15))
-		moveTo(servos.rightBtmLeg, rightAngleOffset + 0, math.rad(12))
+		moveTo(servos.rightTopLeg, rightAngleOffset + math.rad(60), math.rad(25))
+		moveTo(servos.rightBtmLeg, rightAngleOffset + math.rad(27), math.rad(45))
 	end, function()
-		moveTo(servos.leftTopLeg, leftAngleOffset - math.rad(-15), math.rad(9))
+		moveTo(servos.leftTopLeg, leftAngleOffset - math.rad(-30), math.rad(24))
 	end)
 	servos.leftBtmLeg.setTargetAngle(leftAngleOffset - math.rad(-60))
 
 	servos.rightTopLeg.setTargetAngle(rightAngleOffset + math.rad(20))
-	sleep(2)
+	sleep(0.3)
 end
 
 local function stepLeft()
+	moveTo(servos.leftBtmLeg, leftAngleOffset - math.rad(-60), math.rad(15))
 	parallel.waitForAll(function()
-		moveTo(servos.leftBtmLeg, leftAngleOffset - math.rad(-60), math.rad(15))
-		moveTo(servos.leftTopLeg, leftAngleOffset - math.rad(60), math.rad(15))
-		moveTo(servos.leftBtmLeg, leftAngleOffset - 0, math.rad(12))
+		moveTo(servos.leftTopLeg, leftAngleOffset - math.rad(60), math.rad(25))
+		moveTo(servos.leftBtmLeg, leftAngleOffset - math.rad(27), math.rad(45))
 	end, function()
-		moveTo(servos.rightTopLeg, rightAngleOffset + math.rad(-15), math.rad(9))
+		moveTo(servos.rightTopLeg, rightAngleOffset + math.rad(-30), math.rad(24))
 	end)
 	servos.rightBtmLeg.setTargetAngle(rightAngleOffset + math.rad(-60))
 
 	servos.leftTopLeg.setTargetAngle(leftAngleOffset - math.rad(20))
-	sleep(2)
+	sleep(0.3)
 end
 
 function runFeedForwarders()
@@ -208,7 +212,7 @@ function walk(n)
 		print('stepRight')
 		stepRight()
 		print('attaching right')
-		repeat grasps.rightFoot.attach() sleep(0.1) until grasps.rightFoot.any('isAttached')
+		repeat grasps.rightFoot.detach() sleep(0.1) grasps.rightFoot.attach() until grasps.rightFoot.atleast('isAttached', 5)
 		print('right attached')
 		grasps.leftFoot.detach()
 		setRightVelPID(table.unpack(supportingPID))
@@ -220,7 +224,7 @@ function walk(n)
 		print('stepLeft')
 		stepLeft()
 		print('attaching left')
-		repeat grasps.leftFoot.attach() sleep(0.1) until grasps.leftFoot.any('isAttached')
+		repeat grasps.leftFoot.detach() sleep(0.1) grasps.leftFoot.attach() until grasps.leftFoot.atleast('isAttached', 5)
 		print('left attached')
 		grasps.rightFoot.detach()
 		setLeftVelPID(table.unpack(supportingPID))
@@ -254,7 +258,7 @@ elseif command == 'unlockLeft' then
 elseif command == 'unlock' then
 	parallel.waitForAll(grasps.leftFoot.detach, grasps.rightFoot.detach)
 elseif command == 'walk' then
-	parallel.waitForAny(runFeedForwarders, function() walk(3) end)
+	parallel.waitForAny(runFeedForwarders, function() walk(50) end)
 elseif command == 'stand' then
 	servos.leftTopLeg.setTargetAngle(leftAngleOffset)
 	servos.leftBtmLeg.setTargetAngle(leftAngleOffset)
@@ -263,23 +267,30 @@ elseif command == 'stand' then
 elseif command == 'retractRight' then
 	setLeftVelPID(table.unpack(supportingPID))
 	setRightVelPID(table.unpack(steppingPID))
-	servos.rightTopLeg.setTargetAngle(rightAngleOffset + math.rad(45))
-	servos.rightBtmLeg.setTargetAngle(rightAngleOffset - math.rad(45))
+	servos.leftTopLeg.setTargetAngle(leftAngleOffset)
+	servos.leftBtmLeg.setTargetAngle(leftAngleOffset)
+	servos.rightTopLeg.setTargetAngle(rightAngleOffset + math.rad(60))
+	servos.rightBtmLeg.setTargetAngle(rightAngleOffset - math.rad(60))
 elseif command == 'test' then
 	parallel.waitForAny(runFeedForwarders, function()
 		while true do
 			print('a')
 			servos.leftTopLeg.setTargetAngle(leftAngleOffset - math.rad(45))
-			-- servos.leftBtmLeg.setTargetAngle(leftAngleOffset - math.rad(45))
-			servos.rightTopLeg.setTargetAngle(rightAngleOffset + math.rad(45))
-			-- servos.rightBtmLeg.setTargetAngle(rightAngleOffset + math.rad(45))
+		servos.rightTopLeg.setTargetAngle(rightAngleOffset + math.rad(45))
 			sleep(7)
 			print('b')
 			servos.leftTopLeg.setTargetAngle(leftAngleOffset + math.rad(45))
-			-- servos.leftBtmLeg.setTargetAngle(leftAngleOffset + math.rad(45))
 			servos.rightTopLeg.setTargetAngle(rightAngleOffset - math.rad(45))
-			-- servos.rightBtmLeg.setTargetAngle(rightAngleOffset - math.rad(45))
 			sleep(7)
+		end
+	end, function()
+		while true do
+			servos.leftBtmLeg.setTargetAngle(leftAngleOffset - math.rad(-45))
+			servos.rightBtmLeg.setTargetAngle(rightAngleOffset + math.rad(-45))
+			sleep(4)
+			servos.leftBtmLeg.setTargetAngle(leftAngleOffset + math.rad(-45))
+			servos.rightBtmLeg.setTargetAngle(rightAngleOffset - math.rad(-45))
+			sleep(4)
 		end
 	end)
 end

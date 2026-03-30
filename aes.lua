@@ -631,7 +631,7 @@ local CipherStream = {}
 CipherStream.mt = { __index = CipherStream }
 
 function CipherStream:new(o, cipher)
-	assert(o, 'Cannot new a abstract object')
+	assert(o, 'Cannot new an abstract object')
 	setmetatable(o, self.mt)
 	assert(cipher, 'Must give a cipher')
 	o.cipher = cipher

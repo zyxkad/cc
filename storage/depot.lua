@@ -18,6 +18,7 @@ local co_run = crx.run
 local asleep = crx.asleep
 local await = crx.await
 local co_main = crx.main
+local yield = crx.yield
 
 local network = require('network')
 
@@ -120,9 +121,12 @@ local function pollInvLists()
 		local resCache = {}
 		local defers = {}
 		local thrs = {}
+		local thrsN = 0
 		for invName, inv in pairs(inventories) do
-			thrs[#thrs + 1] = co_run(function(inv, invName)
+			thrsN = thrsN + 1
+			thrs[thrsN] = co_run(function(inv, invName)
 				local ths = {}
+				local thsN = 0
 				local size, list
 				await(pool.queue(function()
 					size = inv.p.size()
@@ -134,11 +138,13 @@ local function pollInvLists()
 				for slot, item in pairs(list) do
 					local ind = itemIndexName(item)
 					local detail = itemDetailCache[ind]
+					yield()
 					if detail then
 						item.displayName = detail.displayName
 						item.maxCount = detail.maxCount
 						usedSt = usedSt + item.count / detail.maxCount
 						actualSt = actualSt + 1
+						yield()
 						local c = countedLc[ind]
 						if c then
 							c.count = c.count + item.count
@@ -188,7 +194,9 @@ local function pollInvLists()
 									},
 								},
 							}
-							ths[#ths + 1] = pool.queue(function(item, p, slot)
+							yield()
+							thsN = thsN + 1
+							ths[thsN] = pool.queue(function(item, p, slot)
 								local detail = p.getItemDetail(slot)
 								if not detail then
 									error(string.format('slot: %s/%d does not exists', invName, slot))
@@ -205,9 +213,9 @@ local function pollInvLists()
 						end
 					end
 				end
-				await(table.unpack(ths))
 				inv.size = size
 				inv.list = list
+				await(table.unpack(ths))
 			end, inv, invName)
 		end
 
@@ -254,9 +262,11 @@ local function cmdTake(reply, name, nbt, count, target)
 		return
 	end
 	local thrs = {}
+	local thrsN = 0
 	-- push item to local cache
 	for _, data in pairs(res) do
-		thrs[#thrs + 1] = co_run(cacheInvInside.pullItems, data.inv, data.slot, data.count)
+		thrsN = thrsN + 1
+		thrs[thrsN] = co_run(cacheInvInside.pullItems, data.inv, data.slot, data.count)
 	end
 	await(table.unpack(thrs))
 
@@ -266,8 +276,10 @@ local function cmdTake(reply, name, nbt, count, target)
 	local remains = {}
 	local pushed = 0
 	thrs = {}
+	thrsN = 0
 	for slot, data in pairs(cacheInvOutside.list()) do
-		thrs[#thrs + 1] = co_run(function(slot, data)
+		thrsN = thrsN + 1
+		thrs[thrsN] = co_run(function(slot, data)
 			local ct = cacheInvOutside.pushItems(target, slot, data.count)
 			local remain = data.count - ct
 			if remain ~= 0 then
@@ -302,9 +314,11 @@ end
 local function cmdPut(reply, source, slots)
 	local received = 0
 	local thrs = {}
+	local thrsN = 0
 	-- pull item from remote to local cache
 	for slot, count in pairs(slots) do
-		thrs[#thrs + 1] = co_run(function(source, slot, count)
+		thrsN = thrsN + 1
+		thrs[thrsN] = co_run(function(source, slot, count)
 			local pulled = cacheInvOutside.pullItems(source, slot, count)
 			received = received + pulled
 		end, source, slot, count)
@@ -329,8 +343,10 @@ local function cmdPut(reply, source, slots)
 	if deposited < received then
 		-- clear cache
 		local thrs = {}
+		local thrsN = 0
 		for slot, data in pairs(cacheInvOutside.list()) do
-			thrs[#thrs + 1] = co_run(cacheInvOutside.pushItems, source, slot, data.count)
+			thrsN = thrsN + 1
+			thrs[thrsN] = co_run(cacheInvOutside.pushItems, source, slot, data.count)
 		end
 		await(table.unpack(thrs))
 	end

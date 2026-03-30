@@ -10,25 +10,27 @@ function main(inputName, outputName, fuelName, ...)
 	print('Fuel:', fuelName)
 	local fuelInv = assert(peripheral.wrap(fuelName))
 	while true do
-		local minFurnaceInd = 0
+		local furnaceInd = 0
 		for slot, item in pairs(inputInv.list()) do
 			if item.count >= 8 then
-				for i, furnace in ipairs(furnaces) do
-					if i > minFurnaceInd then
-						local amount = inputInv.pushItems(furnace, slot, 8, 1)
-						item.count = item.count - amount
-						if amount < 8 then
-							inputInv.pullItems(furnace, 1, amount)
-							minFurnaceInd = i
-						end
-						if item.count < 8 then
-							break
-						end
+				local i = furnaceInd
+				repeat
+					furnace = furnaces[i]
+					local amount = inputInv.pushItems(furnace, slot, 8, 1)
+					item.count = item.count - amount
+					if amount < 8 then
+						inputInv.pullItems(furnace, 1, amount)
+						minFurnaceInd = i
 					end
-				end
+					if item.count < 8 then
+						break
+					end
+					i = i % #furnaces + 1
+				until i == furnaceInd
+				furnaceInd = i
 			end
 		end
-		minFurnaceInd = 0
+		local minFurnaceInd = 0
 		for slot, item in pairs(fuelInv.list()) do
 			for i, furnace in ipairs(furnaces) do
 				if i > minFurnaceInd then

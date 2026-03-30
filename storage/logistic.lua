@@ -11,7 +11,7 @@ local await = crx.await
 local asleep = crx.asleep
 local co_main = crx.main
 
-local operPool -- = crx.newThreadPool(160)
+local operPool = crx.newThreadPool(160)
 
 local network = require('network')
 
@@ -377,9 +377,7 @@ function main()
 
 	sources = parseLogisticFile()
 
-	co_main(function()
-		operPool = crx.newThreadPool(160)
-	end, network.run, timedParseLogisticFile, pollInvs)
+	co_main(network.run, timedParseLogisticFile, pollInvs)
 end
 
 main()
